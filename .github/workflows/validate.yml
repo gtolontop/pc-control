@@ -8,8 +8,8 @@ permissions:
   contents: read
 
 jobs:
-  python-syntax:
-    name: Python syntax
+  static-analysis:
+    name: Static analysis
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -17,8 +17,9 @@ jobs:
         with:
           python-version: "3.13"
       - name: Parse Python without executing it
-        shell: python
+        shell: bash
         run: |
+          python - <<'PY'
           import ast
           from pathlib import Path
 
@@ -26,12 +27,7 @@ jobs:
           for path in files:
               ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
           print(f"Validated {len(files)} Python files")
-
-  powershell-syntax:
-    name: PowerShell syntax
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
+          PY
       - name: Parse PowerShell without executing it
         shell: pwsh
         run: |
