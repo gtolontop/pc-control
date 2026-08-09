@@ -1,0 +1,58 @@
+[
+  {
+    "id": "chrome",
+    "name": "Chrome",
+    "path": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+  },
+  {
+    "id": "explorer",
+    "name": "Explorateur",
+    "path": "C:\\WINDOWS\\explorer.exe"
+  },
+  {
+    "id": "notepad",
+    "name": "Bloc-notes",
+    "path": "C:\\WINDOWS\\System32\\notepad.exe"
+  },
+  {
+    "id": "terminal",
+    "name": "Terminal",
+    "path": "C:\\Users\\teamr\\AppData\\Local\\Microsoft\\WindowsApps\\wt.exe"
+  },
+  {
+    "id": "taskmgr",
+    "name": "Gestionnaire de taches",
+    "path": "C:\\WINDOWS\\System32\\Taskmgr.exe"
+  },
+  {
+    "id": "parsec",
+    "name": "Parsec",
+    "path": "C:\\Program Files\\Parsec\\parsecd.exe"
+  },
+  {
+    "id": "spotify",
+    "name": "Spotify",
+    "path": "C:\\Users\\teamr\\AppData\\Roaming\\Spotify\\Spotify.exe"
+  },
+  {
+    "id": "steam",
+    "name": "Steam",
+    "path": "C:\\Program Files (x86)\\Steam\\steam.exe"
+  },
+  {
+    "id": "discord",
+    "name": "Discord",
+    "path": "C:\\Users\\teamr\\AppData\\Local\\Discord\\Update.exe",
+    "args": "--processStart Discord.exe"
+  },
+  {
+    "id": "vscode",
+    "name": "VS Code",
+    "path": "C:\\Program Files\\Microsoft VS Code\\Code.exe"
+  },
+  {
+    "id": "fancontrol",
+    "name": "FanControl",
+    "path": "C:\\Program Files (x86)\\FanControl\\FanControl.exe"
+  }
+]

@@ -1,197 +1,617 @@
-"""GTOL Control Center — interface PWA monochrome."""
+"""GTOL PC Control — interface PWA sobre, mobile-first.
+
+Une seule page, cinq onglets en barre basse (Accueil, Écran, Fichiers, Système,
+Terminal). Monochrome, dense, sans fioriture : uniquement des commandes utiles.
+Toutes les actions passent par /api/action (liste blanche stricte côté serveur).
+"""
 
 STYLE = r"""
 *,*::before,*::after{box-sizing:border-box}
 :root{
-  color-scheme:dark;--bg:#050505;--panel:#0b0b0b;--raised:#111;--hover:#171717;
-  --text:#f4f4f2;--soft:#a4a4a0;--dim:#686865;--line:#242424;--strong:#3b3b3b;
-  --inverse:#080808;--r:12px;--ri:8px;
-  font-family:Inter,ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  color-scheme:dark;
+  --bg:#0a0a0b;--surface:#141416;--raised:#1b1b1e;--line:#26262b;--edge:#34343a;
+  --text:#f3f3f1;--dim:#8c8c93;--faint:#5c5c63;--inverse:#0a0a0b;
+  --ok:#5fd39a;--warn:#e6b54a;--bad:#e8705a;
+  --r:14px;--ri:10px;--nav:60px;
+  font-family:ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,system-ui,sans-serif;
   -webkit-tap-highlight-color:transparent
 }
-html{min-width:320px;background:var(--bg)}body{margin:0;min-height:100dvh;background:var(--bg);color:var(--text);font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale}
-button,input{font:inherit}button{color:inherit}[hidden]{display:none!important}::selection{background:var(--text);color:var(--inverse)}
-.mono,.eyebrow,.metric-value,.score,.fresh,.chip,.timeline time{font-family:"SFMono-Regular",Consolas,"Liberation Mono",monospace;font-variant-numeric:tabular-nums}
-.shell{width:min(100%,1120px);margin-inline:auto;padding:max(18px,env(safe-area-inset-top)) max(18px,env(safe-area-inset-right)) calc(40px + env(safe-area-inset-bottom)) max(18px,env(safe-area-inset-left))}
-.topbar{display:flex;align-items:center;justify-content:space-between;gap:16px;min-height:48px;margin-block-end:26px}.brand{display:flex;align-items:center;gap:12px;min-width:0}.brand-mark{display:grid;width:34px;height:34px;flex:none;place-items:center;border:1px solid var(--text);border-radius:8px;background:var(--text);color:var(--inverse);font-size:11px;font-weight:800}.brand-copy{display:grid;min-width:0;line-height:1.15}.brand-copy strong{font-size:13px;letter-spacing:-.01em}.brand-copy span{overflow:hidden;color:var(--dim);font-size:10px;text-overflow:ellipsis;white-space:nowrap}
-.top-actions,.inline-actions{display:flex;align-items:center;gap:8px}.btn,.icon-btn,.text-btn{min-height:44px;border:1px solid var(--line);border-radius:var(--ri);background:transparent;color:var(--soft);cursor:pointer;font-weight:650;transition-property:background,border-color,color,scale,opacity;transition-duration:140ms}.btn{padding:10px 14px;font-size:12px}.icon-btn{display:grid;min-width:44px;padding:8px;place-items:center;font-size:18px}.text-btn{min-height:32px;padding:4px 0;border:0;font-size:10px;text-decoration:underline;text-underline-offset:3px}.btn:hover,.icon-btn:hover{border-color:var(--strong);background:var(--hover);color:var(--text)}button:active,.action:active{scale:.96}button:disabled{cursor:not-allowed;opacity:.35}
-button:focus-visible,input:focus-visible,summary:focus-visible,a:focus-visible{outline:2px solid var(--text);outline-offset:3px}
-.hero{padding:clamp(22px,5vw,38px);border:1px solid var(--strong);border-radius:var(--r);background:var(--panel)}.hero-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(240px,340px);align-items:end;gap:32px}.eyebrow{margin:0 0 18px;color:var(--dim);font-size:10px;letter-spacing:.14em;text-transform:uppercase}.hero h1{max-width:12ch;margin:0;font-size:clamp(42px,9vw,76px);font-weight:730;letter-spacing:-.065em;line-height:.9;text-wrap:balance}.hero-message{max-width:52ch;min-height:1.5em;margin:18px 0 0;color:var(--soft);font-size:13px;text-wrap:pretty}.fresh{display:flex;flex-wrap:wrap;gap:8px 18px;margin-block-start:24px;color:var(--dim);font-size:10px}
-.scorebox{padding:18px;border:1px solid var(--line);border-radius:var(--ri);background:var(--bg)}.score-head{display:flex;align-items:flex-end;justify-content:space-between;gap:16px}.score{font-size:38px;letter-spacing:-.07em;line-height:1}.score-label{color:var(--dim);font-size:10px;text-align:end}.meter{display:grid;margin-block:18px;grid-template-columns:repeat(6,1fr);gap:4px}.meter i{height:4px;background:var(--line)}.meter i.on{background:var(--text)}.primary{display:grid;place-items:center;width:100%;min-height:52px;padding:12px 16px;border:1px solid var(--text);border-radius:var(--ri);background:var(--text);color:var(--inverse);cursor:pointer;font-size:12px;font-weight:800;transition-property:background,color,scale;transition-duration:140ms}.primary:hover{background:#d8d8d5}.primary:disabled{border-color:var(--line);background:transparent;color:var(--soft);opacity:1}.score-note{margin:10px 0 0;color:var(--dim);font-size:10px;text-align:center}
-.layout{display:grid;margin-block-start:28px;grid-template-columns:minmax(0,1.65fr) minmax(280px,.85fr);align-items:start;gap:28px}.maincol,.sidecol{display:grid;gap:30px}.sidecol{position:sticky;inset-block-start:18px}
-.section-head{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;margin-block-end:12px}.section-head h2{margin:0;font-size:14px;letter-spacing:-.015em}.section-head p{margin:0;color:var(--dim);font-size:10px}.block{border:1px solid var(--line);border-radius:var(--r);background:var(--panel)}
-.metrics{display:grid;overflow:hidden;grid-template-columns:repeat(3,minmax(0,1fr));gap:1px;background:var(--line)}.metric{min-width:0;padding:16px;background:var(--panel)}.metric-label{display:block;margin-block-end:22px;color:var(--dim);font-size:10px}.metric-value{display:block;overflow:hidden;font-size:16px;font-weight:700;text-overflow:ellipsis;white-space:nowrap}.metric-note{display:block;overflow:hidden;margin-block-start:4px;color:var(--dim);font-size:9px;text-overflow:ellipsis;white-space:nowrap}.metric-track{height:2px;margin-block-start:12px;overflow:hidden;background:var(--line)}.metric-fill{display:block;width:0;height:100%;background:var(--text);transition-property:width;transition-duration:400ms}
-.live-panel{padding:16px}.live-summary{display:flex;align-items:flex-start;justify-content:space-between;gap:18px}.live-title{display:grid;gap:3px}.live-title strong{font-size:12px}.live-title span{color:var(--dim);font-size:9px}.signal{display:flex;height:56px;margin-block:18px 14px;align-items:flex-end;gap:3px;overflow:hidden}.signal i{min-width:3px;height:12%;flex:1;background:var(--strong);transition-property:height,background;transition-duration:280ms}.signal i.live{background:var(--text)}.signal i.bad{background:repeating-linear-gradient(135deg,var(--text) 0 1px,transparent 1px 3px)}.live-stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}.live-stat{display:grid;gap:3px}.live-stat span{color:var(--dim);font-size:8px}.live-stat strong{overflow:hidden;font-family:"SFMono-Regular",Consolas,monospace;font-size:10px;text-overflow:ellipsis;white-space:nowrap}.live-pulse{display:inline-block;width:7px;height:7px;margin-inline-end:6px;border:1px solid currentColor;border-radius:50%}.live-pulse.on{background:currentColor}
-.history-panel{padding:16px}.history-head{display:flex;align-items:center;justify-content:space-between;gap:12px}.history-tabs{display:flex;flex-wrap:wrap;gap:5px}.history-tab{min-height:34px;padding:6px 9px;border:1px solid var(--line);border-radius:7px;background:transparent;color:var(--dim);cursor:pointer;font-size:9px;font-weight:700}.history-tab[aria-pressed=true]{border-color:var(--text);background:var(--text);color:var(--inverse)}.history-chart{display:flex;height:118px;margin-block:20px 14px;align-items:flex-end;gap:2px;overflow:hidden}.history-chart i{min-width:2px;flex:1;background:var(--strong);transition-property:height,background;transition-duration:240ms}.history-chart i.live{background:var(--text)}.history-summary,.session-stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}.history-stat{display:grid;gap:3px}.history-stat span{color:var(--dim);font-size:8px}.history-stat strong{font-family:"SFMono-Regular",Consolas,monospace;font-size:10px}.route{display:grid;padding:16px;grid-template-columns:1fr auto 1fr auto 1fr auto 1fr;align-items:center;gap:8px}.route-node{display:grid;min-width:0;min-height:70px;padding:11px;border:1px solid var(--line);border-radius:var(--ri);align-content:space-between;gap:8px}.route-node strong{overflow:hidden;font-size:10px;text-overflow:ellipsis;white-space:nowrap}.route-node span{color:var(--dim);font-size:8px}.route-node.on{border-color:var(--strong)}.route-link{width:18px;height:1px;background:var(--strong)}.route-link.on{background:var(--text)}.session-panel{padding:16px}.session-stats{margin-block-end:16px}.session-stat{display:grid;gap:3px}.session-stat span{color:var(--dim);font-size:8px}.session-stat strong{font-family:"SFMono-Regular",Consolas,monospace;font-size:13px}.blackbox-actions{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.blackbox-actions button{min-height:42px;border:1px solid var(--line);border-radius:var(--ri);background:transparent;color:var(--soft);cursor:pointer;font-size:9px;font-weight:700}.blackbox-actions button:hover{border-color:var(--strong);color:var(--text)}.scan-score{font-family:"SFMono-Regular",Consolas,monospace;font-size:11px}
-.range-tabs{display:flex;flex-wrap:wrap;gap:5px}.range-tab{min-height:34px;padding:6px 9px;border:1px solid var(--line);border-radius:7px;background:transparent;color:var(--dim);cursor:pointer;font-family:"SFMono-Regular",Consolas,monospace;font-size:8px;font-weight:700}.range-tab[aria-pressed=true]{border-color:var(--text);color:var(--text)}.observatory{padding:16px}.sla-grid{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:1px;background:var(--line)}.sla-stat{display:grid;min-width:0;min-height:82px;padding:12px;background:var(--panel);align-content:space-between;gap:8px}.sla-stat span{color:var(--dim);font-size:8px}.sla-stat strong{overflow:hidden;font-family:"SFMono-Regular",Consolas,monospace;font-size:14px;text-overflow:ellipsis;white-space:nowrap}.insights{display:grid;margin-block-start:14px;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}.insight{display:grid;min-height:82px;padding:12px;border:1px solid var(--line);border-radius:var(--ri);align-content:space-between;gap:10px}.insight span{color:var(--dim);font-size:8px}.insight strong{font-size:10px;line-height:1.35}.shared-empty{padding:24px;color:var(--dim);font-size:10px;text-align:center}.audit-duration{color:var(--dim);font-family:"SFMono-Regular",Consolas,monospace;font-size:8px}
-.services{display:grid}.service{display:grid;min-height:68px;padding:14px 16px;border-block-end:1px solid var(--line);grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:13px}.service:last-child{border:0}.state{width:9px;height:9px;border:1px solid var(--dim);border-radius:50%}.state.on{border-color:var(--text);background:var(--text)}.state.warn{border-radius:0;background:repeating-linear-gradient(135deg,var(--text) 0 1px,transparent 1px 3px)}.service-copy{min-width:0}.service-copy strong{display:block;font-size:12px}.service-copy span{display:block;overflow:hidden;color:var(--dim);font-size:10px;text-overflow:ellipsis;white-space:nowrap}.mini{min-height:34px;padding:6px 10px;border:1px solid var(--line);border-radius:7px;background:transparent;color:var(--soft);cursor:pointer;font-size:10px;font-weight:650}.mini:hover{border-color:var(--strong);color:var(--text)}
-.automations{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}.action{display:flex;min-height:142px;padding:16px;border:1px solid var(--line);border-radius:var(--r);flex-direction:column;align-items:flex-start;justify-content:space-between;background:var(--panel);color:var(--text);cursor:pointer;text-align:start;text-decoration:none;transition-property:background,border-color,scale,opacity;transition-duration:150ms}.action:hover{border-color:var(--strong);background:var(--hover)}.action-index{color:var(--dim);font-size:10px}.action strong{display:block;margin-block-end:4px;font-size:12px}.action span:last-child{color:var(--dim);font-size:10px;line-height:1.35}
-.recommendations{display:grid;gap:8px}.recommendation{display:flex;min-height:54px;padding:12px;border:1px solid var(--line);border-radius:var(--ri);align-items:center;justify-content:space-between;gap:12px;background:var(--panel)}.recommendation-copy{min-width:0}.recommendation-copy strong{display:block;font-size:11px}.recommendation-copy span{color:var(--dim);font-size:9px}.all-good{padding:18px;border:1px dashed var(--strong);border-radius:var(--ri);color:var(--soft);font-size:11px;text-align:center}
-.panel-title{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 16px;border-block-end:1px solid var(--line)}.panel-title strong{font-size:12px}.panel-body{padding:14px}.quick-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}.quick{display:grid;min-height:48px;padding:10px;border:1px solid var(--line);border-radius:var(--ri);place-items:center;background:transparent;color:var(--soft);cursor:pointer;font-size:10px;font-weight:650;text-align:center;text-decoration:none}.quick:hover{border-color:var(--strong);background:var(--hover);color:var(--text)}.mode{display:grid;margin-block-start:8px;padding:4px;border:1px solid var(--line);border-radius:var(--ri);grid-template-columns:1fr 1fr}.mode button{min-height:38px;border:0;border-radius:5px;background:transparent;color:var(--dim);cursor:pointer;font-size:10px;font-weight:650}.mode button.active{background:var(--text);color:var(--inverse)}
-.setting{display:flex;min-height:46px;align-items:center;justify-content:space-between;gap:12px;border-block-end:1px solid var(--line)}.setting:last-child{border:0}.setting-copy{display:grid;gap:2px}.setting-copy span{font-size:10px}.setting-copy small{color:var(--dim);font-size:8px}.switch{position:relative;width:34px;height:20px;flex:none}.switch input{position:absolute;width:1px;height:1px;opacity:0}.switch i{display:block;width:34px;height:20px;border:1px solid var(--strong);border-radius:999px;background:var(--bg)}.switch i::after{display:block;width:12px;height:12px;margin:3px;border-radius:50%;background:var(--dim);content:"";transition-property:translate,background;transition-duration:140ms}.switch input:checked+i::after{translate:14px 0;background:var(--text)}.switch input:focus-visible+i{outline:2px solid var(--text);outline-offset:3px}
-.diagnostics{display:grid;gap:6px}.check{display:flex;min-height:36px;padding:6px 8px;align-items:center;justify-content:space-between;gap:12px;color:var(--soft);font-size:10px}.check b{font-weight:650}.check span{color:var(--dim);font-family:"SFMono-Regular",Consolas,monospace}.chips{display:flex;flex-wrap:wrap;gap:6px}.chip{display:inline-flex;min-height:28px;padding:5px 8px;border:1px solid var(--line);border-radius:999px;align-items:center;gap:6px;color:var(--dim);font-size:9px}.chip::before{width:5px;height:5px;border:1px solid currentColor;border-radius:50%;content:""}.chip.on{color:var(--text)}.chip.on::before{background:var(--text)}
-.timeline{display:grid;margin:0;padding:0;list-style:none}.timeline li{display:grid;min-height:54px;padding:12px 14px;border-block-end:1px solid var(--line);grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:12px}.timeline li:last-child{border:0}.timeline-copy{min-width:0}.timeline-copy strong{display:block;overflow:hidden;font-size:11px;text-overflow:ellipsis;white-space:nowrap}.timeline-copy span{display:block;overflow:hidden;color:var(--dim);font-size:9px;text-overflow:ellipsis;white-space:nowrap}.timeline time{color:var(--dim);font-size:9px}.empty{margin:0;padding:20px;color:var(--dim);font-size:10px;text-align:center}
-.queue{display:grid;gap:6px}.queue-step{display:grid;min-height:38px;padding:8px 10px;border:1px solid var(--line);border-radius:7px;grid-template-columns:18px minmax(0,1fr) auto;align-items:center;gap:8px;color:var(--dim);font-size:10px}.queue-step.running{border-color:var(--strong);color:var(--text)}.queue-step.done{color:var(--soft)}.queue-step b{font-size:9px}.queue-step span:last-child{font-family:"SFMono-Regular",Consolas,monospace;font-size:8px;text-transform:uppercase}
-.danger{border-color:var(--strong)}.danger .panel-body{display:grid;gap:8px}.danger-btn{min-height:44px;border:1px solid var(--strong);border-radius:var(--ri);background:transparent;color:var(--soft);cursor:pointer;font-size:10px;font-weight:700}.danger-btn:hover{background:var(--text);color:var(--inverse)}
-.footer{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-block-start:34px;padding-block-start:18px;border-block-start:1px solid var(--line);color:var(--dim);font-size:9px}
-.gate{display:grid;min-height:calc(100dvh - 60px);place-items:center}.login{width:min(100%,420px);padding:32px;border:1px solid var(--strong);border-radius:var(--r);background:var(--panel)}.login .brand{margin-block-end:38px}.login h1{margin:0;font-size:36px;letter-spacing:-.055em;line-height:1}.login>p{margin:12px 0 28px;color:var(--soft);font-size:12px}.label{display:block;margin-block-end:8px;color:var(--soft);font-size:10px}.key{width:100%;min-height:50px;padding:12px;border:1px solid var(--strong);border-radius:var(--ri);background:var(--bg);color:var(--text);font-size:16px}.key[aria-invalid=true]{outline:2px double var(--text)}.login-submit{width:100%;min-height:50px;margin-block-start:8px;border:1px solid var(--text);border-radius:var(--ri);background:var(--text);color:var(--inverse);cursor:pointer;font-size:11px;font-weight:800}.gate-error{min-height:1.4em;margin:9px 0 0;color:var(--soft);font-size:10px}.security{margin-block-start:22px!important;padding-block-start:16px;border-block-start:1px solid var(--line);color:var(--dim)!important;font-size:9px!important}
-.offline{position:sticky;inset-block-start:0;z-index:30;padding:8px 16px;border-block-end:1px solid var(--text);background:var(--text);color:var(--inverse);font-size:10px;font-weight:750;text-align:center}.busybar{position:fixed;inset:0 0 auto;z-index:50;height:2px;overflow:hidden;background:var(--line)}.busybar::after{position:absolute;inset-block:0;width:36%;background:var(--text);content:"";animation:load 1.1s ease-in-out infinite}@keyframes load{from{inset-inline-start:-36%}to{inset-inline-start:100%}}
-dialog{width:min(calc(100% - 32px),430px);padding:0;border:1px solid var(--strong);border-radius:var(--r);background:var(--panel);color:var(--text);overscroll-behavior:contain}dialog::backdrop{background:rgba(0,0,0,.82);backdrop-filter:blur(5px)}.dialog{padding:24px}.dialog .eyebrow{margin-block-end:10px}.dialog h2{margin:0;font-size:22px;letter-spacing:-.04em}.dialog p{margin:10px 0 22px;color:var(--soft);font-size:11px}.dialog-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px}.dialog-actions button{min-height:46px;border:1px solid var(--strong);border-radius:var(--ri);cursor:pointer;font-size:10px;font-weight:700}.cancel{background:transparent;color:var(--soft)}.confirm{background:var(--text);color:var(--inverse)}
-.palette{width:min(calc(100% - 24px),560px)}.palette-box{padding:16px}.palette-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-block-end:12px}.palette-head strong{font-size:12px}.palette-close{min-width:40px;min-height:40px;border:1px solid var(--line);border-radius:7px;background:transparent;color:var(--soft);cursor:pointer}.command-search{width:100%;min-height:48px;padding:11px 13px;border:1px solid var(--strong);border-radius:var(--ri);background:var(--bg);color:var(--text);font-size:16px}.command-list{display:grid;max-height:min(55vh,430px);margin-block-start:10px;gap:5px;overflow:auto}.command-item{display:grid;min-height:54px;padding:10px 12px;border:1px solid transparent;border-radius:var(--ri);grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:12px;background:transparent;color:var(--text);cursor:pointer;text-align:start}.command-item:hover,.command-item:focus-visible{border-color:var(--strong);background:var(--hover)}.command-copy{display:grid;gap:2px}.command-copy strong{font-size:11px}.command-copy span,.command-key{color:var(--dim);font-size:8px}.palette-empty{padding:24px;color:var(--dim);font-size:10px;text-align:center}
-@media(max-width:860px){.layout{grid-template-columns:1fr}.sidecol{position:static;grid-template-columns:1fr 1fr}.sidecol .danger{grid-column:1/-1}}
-@media(max-width:860px){.sla-grid{grid-template-columns:repeat(3,1fr)}}
-@media(max-width:680px){.shell{padding-inline:14px}.topbar{margin-block-end:18px}.install-label,.command-label{display:none}.hero-grid{grid-template-columns:1fr}.metrics{grid-template-columns:1fr 1fr}.automations{grid-template-columns:1fr}.action{min-height:92px}.sidecol{grid-template-columns:1fr}.sidecol .danger{grid-column:auto}.hero h1{font-size:48px}.scorebox{margin-block-start:4px}.live-stats,.history-summary,.session-stats{grid-template-columns:1fr 1fr}.signal{height:48px}.route{grid-template-columns:1fr}.route-link{width:1px;height:12px;margin-inline-start:22px}.route-node{min-height:58px}.history-head{align-items:flex-start;flex-direction:column}.insights{grid-template-columns:1fr}}
-@media(max-width:390px){.quick-grid,.danger .panel-body,.dialog-actions,.blackbox-actions{grid-template-columns:1fr}.login{padding:24px}.metric{padding:14px}.metric-label{margin-block-end:14px}}
-@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}}
-@media(forced-colors:active){button:focus-visible,input:focus-visible{outline-color:CanvasText}}
+.mono,.val,.crumb,.term,.pill,.kv b{font-family:ui-monospace,"SF Mono",SFMono-Regular,Consolas,"Liberation Mono",monospace;font-variant-numeric:tabular-nums}
+html{background:var(--bg)}
+body{margin:0;min-height:100dvh;background:var(--bg);color:var(--text);font-size:14px;line-height:1.45;-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale}
+button,input,textarea,select{font:inherit;color:inherit}
+[hidden]{display:none!important}
+::selection{background:var(--text);color:var(--inverse)}
+button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-visible,a:focus-visible{outline:2px solid var(--text);outline-offset:2px}
+button{cursor:pointer}button:disabled{opacity:.4;cursor:not-allowed}
+
+/* ---- Structure ---- */
+.app{width:min(100%,720px);margin-inline:auto;padding:max(14px,env(safe-area-inset-top)) 14px calc(var(--nav) + 22px + env(safe-area-inset-bottom))}
+.top{display:flex;align-items:center;justify-content:space-between;gap:12px;height:46px}
+.brand{display:flex;align-items:center;gap:9px;min-width:0}
+.logo{display:grid;width:30px;height:30px;flex:none;place-items:center;border-radius:8px;background:var(--text);color:var(--inverse);font-size:11px;font-weight:800}
+.brand b{font-size:14px;letter-spacing:-.01em}
+.brand small{display:block;color:var(--dim);font-size:10px;line-height:1}
+.top-right{display:flex;align-items:center;gap:8px}
+.stat{display:inline-flex;align-items:center;gap:6px;color:var(--dim);font-size:11px}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--faint);flex:none}
+.dot.on{background:var(--ok)}.dot.off{background:var(--faint)}.dot.warn{background:var(--warn)}.dot.bad{background:var(--bad)}
+.dot.busy{background:var(--warn);animation:blink 1s infinite}
+@keyframes blink{50%{opacity:.3}}
+.iconbtn{display:grid;width:38px;height:38px;place-items:center;border:1px solid var(--line);border-radius:var(--ri);background:transparent;font-size:16px}
+.iconbtn:active{background:var(--raised)}
+
+.view{margin-top:16px;display:grid;gap:14px}
+.card{border:1px solid var(--line);border-radius:var(--r);background:var(--surface);overflow:hidden}
+.card-h{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:13px 15px;border-bottom:1px solid var(--line)}
+.card-h h2{margin:0;font-size:13px;font-weight:600;letter-spacing:-.01em}
+.card-h .sub{color:var(--dim);font-size:10px;text-transform:uppercase;letter-spacing:.08em}
+.card-b{padding:14px}
+.card-b.flush{padding:0}
+
+.msg{display:flex;align-items:center;gap:10px;font-size:13px;color:var(--text)}
+.msg .t{color:var(--dim);font-size:11px}
+
+/* ---- Metrics ---- */
+.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:var(--line)}
+.cell{padding:13px 14px;background:var(--surface);min-width:0}
+.cell .k{color:var(--dim);font-size:10px;text-transform:uppercase;letter-spacing:.06em}
+.cell .val{display:block;margin-top:9px;font-size:17px;font-weight:650;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cell .bar{height:3px;margin-top:9px;background:var(--line);border-radius:2px;overflow:hidden}
+.cell .bar i{display:block;height:100%;width:0;background:var(--text);transition:width .4s}
+.cell .bar i.hot{background:var(--bad)}
+
+/* ---- Buttons ---- */
+.btn{display:flex;align-items:center;justify-content:center;gap:8px;width:100%;min-height:48px;padding:0 14px;border:1px solid var(--edge);border-radius:var(--ri);background:transparent;color:var(--text);font-size:13px;font-weight:550;letter-spacing:.01em;transition:background .12s,border-color .12s,transform .05s}
+.btn:active{transform:scale(.98);background:var(--raised)}
+.btn.pri{background:var(--text);color:var(--inverse);border-color:var(--text);font-weight:700}
+.btn.pri:active{background:#d9d9d6}
+.btn.bad{border-color:var(--edge);color:var(--bad)}
+.btn.bad:active{background:var(--bad);color:var(--inverse);border-color:var(--bad)}
+.btn.sm{min-height:38px;font-size:12px;padding:0 11px}
+.btn.armed{background:var(--warn);color:var(--inverse);border-color:var(--warn)}
+.row{display:grid;gap:9px}
+.row.two{grid-template-columns:1fr 1fr}
+.row.three{grid-template-columns:1fr 1fr 1fr}
+.seg{display:grid;grid-template-columns:1fr 1fr;gap:4px;padding:4px;border:1px solid var(--line);border-radius:var(--ri)}
+.seg button{min-height:40px;border:0;border-radius:7px;background:transparent;color:var(--dim);font-size:12px;font-weight:600}
+.seg button.active{background:var(--text);color:var(--inverse)}
+
+/* ---- Screen tab ---- */
+.screen-wrap{position:relative;background:#000;border-radius:0;line-height:0;touch-action:manipulation;user-select:none}
+.screen-wrap img{display:block;width:100%;height:auto}
+.screen-wrap .ph{display:grid;place-items:center;height:210px;color:var(--faint);font-size:12px}
+.screen-hint{position:absolute;inset-inline:0;bottom:0;padding:6px 10px;background:linear-gradient(transparent,rgba(0,0,0,.6));color:#cfcfcf;font-size:10px;text-align:center;pointer-events:none}
+.tap{position:absolute;width:26px;height:26px;margin:-13px 0 0 -13px;border:2px solid #fff;border-radius:50%;pointer-events:none;animation:tap .4s ease-out forwards}
+@keyframes tap{from{transform:scale(.3);opacity:1}to{transform:scale(1.3);opacity:0}}
+.keybar{display:flex;gap:8px}
+.keybar input{flex:1;min-height:44px;padding:0 12px;border:1px solid var(--edge);border-radius:var(--ri);background:var(--bg)}
+.keys{display:grid;grid-template-columns:repeat(6,1fr);gap:6px}
+.keys button{min-height:40px;border:1px solid var(--line);border-radius:8px;background:transparent;color:var(--text);font-size:12px}
+.keys button:active{background:var(--raised)}
+.vol{display:flex;align-items:center;gap:12px}
+.vol input[type=range]{flex:1;accent-color:var(--text);height:28px}
+.vol .val{width:44px;text-align:right;font-size:13px}
+
+/* ---- Files ---- */
+.crumb{display:flex;align-items:center;gap:4px;flex-wrap:wrap;padding:11px 14px;border-bottom:1px solid var(--line);font-size:12px;color:var(--dim);overflow:hidden}
+.crumb b{color:var(--text)}
+.list{display:grid}
+.item{display:grid;grid-template-columns:26px 1fr auto;align-items:center;gap:11px;padding:12px 14px;border-bottom:1px solid var(--line);background:transparent;border-left:0;border-right:0;border-top:0;text-align:left;width:100%}
+.item:last-child{border-bottom:0}
+.item:active{background:var(--raised)}
+.item .ic{font-size:16px;text-align:center;color:var(--dim)}
+.item .nm{min-width:0;overflow:hidden}
+.item .nm b{display:block;font-size:13px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.item .nm span{color:var(--faint);font-size:10px}
+.item .go{color:var(--faint);font-size:13px}
+.empty{padding:26px;text-align:center;color:var(--faint);font-size:12px}
+
+/* ---- Terminal ---- */
+.term{margin:0;padding:14px;background:#050506;border-radius:var(--ri);max-height:46vh;overflow:auto;font-size:12px;line-height:1.5;white-space:pre-wrap;word-break:break-word;color:#d8d8d8;border:1px solid var(--line)}
+.term .cmd{color:var(--text)}.term .err{color:var(--bad)}.term .ok{color:var(--dim)}
+.term-in{display:flex;gap:8px;margin-top:10px}
+.term-in input{flex:1;min-height:46px;padding:0 12px;border:1px solid var(--edge);border-radius:var(--ri);background:var(--bg)}
+
+/* ---- Processes ---- */
+.proc{display:grid;grid-template-columns:1fr auto auto;align-items:center;gap:10px;padding:11px 14px;border-bottom:1px solid var(--line)}
+.proc:last-child{border-bottom:0}
+.proc .nm{min-width:0}
+.proc .nm b{display:block;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.proc .nm span{color:var(--faint);font-size:10px}
+.proc .mem{color:var(--dim);font-size:12px;white-space:nowrap}
+
+.kv{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:11px 0;border-bottom:1px solid var(--line)}
+.kv:last-child{border-bottom:0}
+.kv span{color:var(--dim);font-size:11px;text-transform:uppercase;letter-spacing:.05em}
+.kv b{font-size:13px;font-weight:600}
+.apps{display:grid;grid-template-columns:repeat(3,1fr);gap:9px}
+.apps button{display:grid;place-items:center;gap:6px;min-height:64px;padding:8px;border:1px solid var(--line);border-radius:var(--ri);background:transparent;font-size:11px;font-weight:500}
+.apps button:active{background:var(--raised)}
+.apps .ap-ic{font-size:19px}
+
+/* ---- Nav ---- */
+.nav{position:fixed;inset-inline:0;bottom:0;z-index:40;display:grid;grid-template-columns:repeat(5,1fr);height:calc(var(--nav) + env(safe-area-inset-bottom));padding-bottom:env(safe-area-inset-bottom);background:rgba(12,12,13,.92);backdrop-filter:blur(14px);border-top:1px solid var(--line)}
+.nav button{display:grid;place-items:center;gap:3px;border:0;background:transparent;color:var(--faint);font-size:9.5px;letter-spacing:.02em}
+.nav button .ni{font-size:19px;line-height:1}
+.nav button.active{color:var(--text)}
+.nav button:active{background:var(--raised)}
+
+/* ---- Gate ---- */
+.gate{display:grid;min-height:100dvh;place-items:center;padding:22px}
+.gate .box{width:min(100%,380px)}
+.gate .logo{width:44px;height:44px;font-size:15px;margin-bottom:22px}
+.gate h1{margin:0 0 6px;font-size:26px;letter-spacing:-.03em}
+.gate p{margin:0 0 22px;color:var(--dim);font-size:13px}
+.gate input{width:100%;min-height:52px;padding:0 15px;border:1px solid var(--edge);border-radius:var(--ri);background:var(--surface);font-size:16px;margin-bottom:10px}
+.gate .err{min-height:18px;margin:8px 2px 0;color:var(--bad);font-size:12px}
+
+/* ---- Toast / busy ---- */
+.busy{position:fixed;inset:0 0 auto;z-index:60;height:2px;background:transparent;overflow:hidden}
+.busy.on::after{content:"";position:absolute;inset-block:0;width:40%;background:var(--text);animation:load 1s infinite ease-in-out}
+@keyframes load{from{left:-40%}to{left:100%}}
+.toast{position:fixed;left:50%;bottom:calc(var(--nav) + 20px + env(safe-area-inset-bottom));transform:translateX(-50%);z-index:70;max-width:90%;padding:11px 16px;border:1px solid var(--edge);border-radius:999px;background:var(--raised);color:var(--text);font-size:12px;box-shadow:0 8px 24px rgba(0,0,0,.5);opacity:0;pointer-events:none;transition:opacity .2s,transform .2s}
+.toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+.toast.bad{border-color:var(--bad)}
+
+dialog{width:min(100% - 32px,400px);padding:0;border:1px solid var(--edge);border-radius:var(--r);background:var(--surface);color:var(--text)}
+dialog::backdrop{background:rgba(0,0,0,.7);backdrop-filter:blur(3px)}
+.dlg{padding:22px}
+.dlg h3{margin:0 0 8px;font-size:17px}
+.dlg p{margin:0 0 18px;color:var(--dim);font-size:13px;word-break:break-word}
+.dlg .row{grid-template-columns:1fr 1fr}
+.dlg input,.dlg textarea{width:100%;min-height:46px;padding:11px;border:1px solid var(--edge);border-radius:var(--ri);background:var(--bg);font-size:15px;margin-bottom:12px}
+.dlg textarea{min-height:150px;resize:vertical;font-family:ui-monospace,Consolas,monospace;font-size:13px}
+@media(prefers-reduced-motion:reduce){*{animation-duration:.01ms!important;transition-duration:.01ms!important}}
 """
 
 SCRIPT = r"""
 (()=>{"use strict";
-const $=(s,r=document)=>r.querySelector(s),$$=(s,r=document)=>[...r.querySelectorAll(s)];
-const KEY="pcControlKey",LOG="pcControlActivity",HISTORY="pcControlHistory",AUTO="pcControlAutoRefresh",NOTIFY="pcControlNotify",AUTOFIX="pcControlAutoRepair",VIGIL="pcControlVigil";
-const gate=$("#gate"),app=$("#app"),field=$("#key"),gateError=$("#gateError"),busybar=$("#busybar"),dialog=$("#confirmDialog"),palette=$("#commandPalette");
-let key=localStorage.getItem(KEY)||"",data=null,busy=false,refreshing=false,lastSync=0,latency=0,wakeUntil=0,pending=null,macro=false,installPrompt=null;
-let streamAbort=null,reconnectTimer=0,streamActive=false,streamBackoff=1200,samples=[],previousState=null,wakeLock=null,autoFixing=false,activeMetric="cpu";
-let sessionStart=Date.now(),statusEvents=0,onlineEvents=0,reconnects=0,incidentCount=0,thresholdState={thermal:false,disk:false};
-let serverHistory=[],serverSummary=null,sharedAudit=[],historyMinutes=60,loadingPersistent=false;
-const fixCooldown={},names={"share-parsec":"Partager Parsec","repair-parsec":"Réparer Parsec","launch-codex":"Lancer Codex","repair-fans":"Réparer FanControl",normal:"Mode normal",night:"Mode nuit",hibernate:"Éteindre GTOL",reboot:"Redémarrer GTOL"};
-const duration=m=>{if(!Number.isFinite(m))return"—";const h=Math.floor(m/60),n=Math.round(m%60);return h?`${h} h ${String(n).padStart(2,"0")}`:`${n} min`};
-const sleep=ms=>new Promise(r=>setTimeout(r,ms)),clamp=(v,a=0,b=100)=>Math.max(a,Math.min(b,v));
-function setBusy(v){busy=v;busybar.hidden=!v;app.setAttribute("aria-busy",String(v));$$(".remote",app).forEach(b=>b.disabled=v||b.dataset.off==="true")}
-function disable(b,v){b.dataset.off=String(v);b.disabled=busy||v}
-function setMessage(title,text,state=""){ $("#statusTitle").textContent=title;$("#statusText").textContent=text;$("#statusDot").className=`state ${state}` }
-function setLiveState(mode){streamActive=mode==="live";const chip=$("#liveState"),transport=$("#liveTransport");chip.className=`chip ${streamActive?"on":""}`;chip.textContent=mode==="live"?"LIVE":mode==="connecting"?"CONNEXION":"PAUSE";transport.textContent=mode==="live"?"FLUX SSE":mode==="connecting"?"RECONNEXION":"EN PAUSE";$("#livePulse").className=`live-pulse ${streamActive?"on":""}`}
-async function api(path,method="GET",payload){const o={method,cache:"no-store",headers:{Authorization:`Bearer ${key}`}};if(payload){o.headers["Content-Type"]="application/json";o.body=JSON.stringify(payload)}const start=Date.now();let r;try{r=await fetch(path,o)}catch{throw Error("Aucune connexion réseau.")}latency=Math.max(1,Date.now()-start);const d=await r.json().catch(()=>({}));if(r.status===401){const e=Error("Clé d’accès refusée.");e.unauthorized=true;throw e}if(!r.ok)throw Error(d.error||"Action impossible.");return d}
-function readiness(d){const pc=d?.pc;return [!!d?.online,!!d?.control_ready,!!pc?.parsec_ready,!!pc?.fan_control,!!pc?.codex,pc?.mode==="normal"]}
-function metric(id,value,note,load){$(`#${id}Value`).textContent=value;$(`#${id}Note`).textContent=note;const fill=$(`#${id}Fill`);if(fill)fill.style.width=`${Number.isFinite(load)?clamp(load):0}%`}
-function service(id,on,label,note){$(`#${id}State`).className=`state ${on?"on":"warn"}`;$(`#${id}Label`).textContent=label;$(`#${id}Note`).textContent=note;const b=$(`#${id}Fix`);if(b){b.hidden=on;disable(b,!data?.online)}}
-function networkLabel(){const n=navigator.connection;return n?.effectiveType?`${n.effectiveType.toUpperCase()} · ${n.downlink||"—"} MB/S`:"HTTPS"}
-function recordSample(d,source){if(source==="live"&&Number.isFinite(d.streamed_at))latency=clamp(Date.now()-d.streamed_at,1,9999);samples.push({latency,online:!!d.online,time:Date.now()});samples=samples.slice(-36);renderSignal()}
-function renderSignal(){const box=$("#signal");box.textContent="";const padded=[...Array(Math.max(0,36-samples.length)).fill(null),...samples];padded.forEach(s=>{const bar=document.createElement("i");if(s){bar.className=s.online?"live":"bad";bar.style.height=`${clamp(12+(s.latency/5),12,100)}%`}box.append(bar)});const recent=samples.slice(-10).map(x=>x.latency),jitter=recent.length>1?Math.round(recent.slice(1).reduce((sum,v,i)=>sum+Math.abs(v-recent[i]),0)/(recent.length-1)):0;$("#liveLatency").textContent=samples.length?`${latency} MS`:"—";$("#liveJitter").textContent=samples.length?`${jitter} MS`:"—";$("#liveNetwork").textContent=networkLabel()}
-function historyData(){try{const v=JSON.parse(localStorage.getItem(HISTORY)||"[]");return Array.isArray(v)?v.slice(-180):[]}catch{return[]}}
-function pushHistory(d){const p=d.pc;if(!p)return;const rows=historyData(),last=rows.at(-1);if(last&&Date.now()-last.t<2500)return;rows.push({t:Date.now(),cpu:p.cpu_load_percent,gpu:p.gpu_load_percent,temp:p.gpu_temperature_c,ram:p.memory_used_percent,latency});localStorage.setItem(HISTORY,JSON.stringify(rows.slice(-180)));renderHistory()}
-function historyRows(){if(serverHistory.length)return serverHistory.map(x=>({t:x.ts*1000,cpu:x.cpu,gpu:x.gpu,temp:x.temperature,ram:x.memory_used,latency:x.probe_ms}));return historyData()}
-function metricConfig(){return{cpu:["CPU","%",100],gpu:["GPU","%",100],temp:["TEMP","°C",100],ram:["RAM","%",100],latency:["SONDE"," MS",Math.max(120,...historyRows().map(x=>Number(x.latency)||0))]}[activeMetric]}
-function renderHistory(){const all=historyRows().filter(x=>Number.isFinite(x[activeMetric])),step=Math.max(1,Math.ceil(all.length/120)),rows=all.filter((_,i)=>i%step===0).slice(-120),box=$("#historyChart"),[label,unit,max]=metricConfig();box.textContent="";const padded=[...Array(Math.max(0,120-rows.length)).fill(null),...rows];padded.forEach(x=>{const bar=document.createElement("i");if(x){bar.className="live";bar.style.height=`${clamp((x[activeMetric]/max)*100,3,100)}%`}box.append(bar)});const values=all.map(x=>x[activeMetric]),min=values.length?Math.min(...values):null,avg=values.length?Math.round(values.reduce((a,b)=>a+b,0)/values.length):null,peak=values.length?Math.max(...values):null,current=values.at(-1);$("#historyLabel").textContent=`${label} · ${all.length} POINTS`;$("#historySource").textContent=serverHistory.length?`BLACKBOX RASPBERRY · ${historyMinutes===10080?"7 J":historyMinutes>=1440?"24 H":historyMinutes>=60?`${historyMinutes/60} H`:`${historyMinutes} MIN`}`:"CACHE LOCAL · 12 MIN";$("#historyCurrent").textContent=current==null?"—":`${current}${unit}`;$("#historyAverage").textContent=avg==null?"—":`${avg}${unit}`;$("#historyMin").textContent=min==null?"—":`${min}${unit}`;$("#historyPeak").textContent=peak==null?"—":`${peak}${unit}`;$("#historyChart").setAttribute("aria-label",values.length?`${label}, valeur actuelle ${current}${unit}, moyenne ${avg}${unit}, minimum ${min}${unit}, maximum ${peak}${unit}`:`Aucune donnée ${label}`);$$(".history-tab").forEach(b=>b.setAttribute("aria-pressed",String(b.dataset.metric===activeMetric)));$$(".range-tab").forEach(b=>b.setAttribute("aria-pressed",String(Number(b.dataset.minutes)===historyMinutes)))}
-function renderRoute(d){const online=navigator.onLine!==false,cloud=!!d,pi=!!d.gateway,win=!!d.online,bridge=!!d.control_ready;[["routeClient",online],["routeCloud",cloud],["routePi",pi],["routeWindows",win&&bridge],["routeEdge1",online&&cloud],["routeEdge2",cloud&&pi],["routeEdge3",pi&&win]].forEach(([id,on])=>{const e=$(`#${id}`);e.classList.toggle("on",on)});$("#routeClientNote").textContent=networkLabel();$("#routeCloudNote").textContent=cloud?"TUNNEL ACTIF":"INJOIGNABLE";$("#routePiNote").textContent=pi?`UP ${duration(d.gateway?.uptime_minutes)}`:"INJOIGNABLE";$("#routeWindowsNote").textContent=bridge?"SSH BRIDÉ PRÊT":win?"PONT INDISPONIBLE":"HORS LIGNE"}
-function renderSession(){const elapsed=Math.max(1,Date.now()-sessionStart),minutes=Math.floor(elapsed/60000),availability=statusEvents?Math.round((onlineEvents/statusEvents)*100):0;$("#sessionTime").textContent=minutes?`${minutes} MIN`:`${Math.floor(elapsed/1000)} S`;$("#sessionAvailability").textContent=`${availability}%`;$("#sessionEvents").textContent=String(statusEvents);$("#sessionIncidents").textContent=String(incidentCount);$("#sessionReconnects").textContent=`${reconnects} RECONNEXION${reconnects>1?"S":""}`}
-function summaryHours(){return historyMinutes<=60?1:historyMinutes<=360?6:historyMinutes<=1440?24:168}
-async function loadPersistent(){if(loadingPersistent||!key)return;loadingPersistent=true;try{const [history,summary,audit]=await Promise.all([api(`/api/history?minutes=${historyMinutes}`),api(`/api/summary?hours=${summaryHours()}`),api("/api/audit?limit=40")]);serverHistory=history.points||[];serverSummary=summary;sharedAudit=audit.items||[];renderHistory();renderObservatory();renderAudit()}catch(e){if(e.unauthorized)lock(e.message)}finally{loadingPersistent=false}}
-function renderObservatory(){const s=serverSummary||{};$("#slaAvailability").textContent=Number.isFinite(s.availability)?`${s.availability}%`:"—";$("#slaBridge").textContent=Number.isFinite(s.bridge_availability)?`${s.bridge_availability}%`:"—";$("#slaIncidents").textContent=String(s.incidents??0);$("#slaSamples").textContent=String(s.samples??0);$("#slaTemperature").textContent=Number.isFinite(s.temperature_peak)?`${s.temperature_peak}°C`:"—";$("#slaProbe").textContent=Number.isFinite(s.probe_average_ms)?`${s.probe_average_ms} MS`:"—";const verdict=!s.samples?"COLLECTE EN COURS":s.availability>=99&&s.incidents===0?"STABILITÉ EXCELLENTE":s.availability>=95?"STABILITÉ À SURVEILLER":"INCIDENT DE DISPONIBILITÉ";$("#insightAvailability").textContent=verdict;$("#insightThermal").textContent=Number.isFinite(s.temperature_peak)?s.temperature_peak<75?`MARGE THERMIQUE SAINE · PIC ${s.temperature_peak}°C`:s.temperature_peak<82?`THERMIQUE ÉLEVÉE · PIC ${s.temperature_peak}°C`:`ALERTE THERMIQUE · PIC ${s.temperature_peak}°C`:"CAPTEUR GPU EN ATTENTE";$("#insightResponse").textContent=Number.isFinite(s.probe_average_ms)?s.probe_average_ms<1500?`PONT RÉACTIF · ${s.probe_average_ms} MS`:s.probe_average_ms<3500?`PONT NORMAL · ${s.probe_average_ms} MS`:`PONT LENT · ${s.probe_average_ms} MS`:"MESURE EN ATTENTE";$("#observatoryRange").textContent=`${summaryHours()} H · PERSISTANT`}
-function renderAudit(){const list=$("#sharedTimeline");list.textContent="";$("#sharedEmpty").hidden=!!sharedAudit.length;sharedAudit.forEach(x=>{const row=document.createElement("li"),mark=document.createElement("i"),copy=document.createElement("span"),strong=document.createElement("strong"),detail=document.createElement("span"),duration=document.createElement("span");mark.className=`state ${x.ok?"on":"warn"}`;copy.className="timeline-copy";strong.textContent=names[x.action]||x.action.toUpperCase();detail.textContent=`${new Date(x.ts*1000).toLocaleString("fr-FR",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"})} · ${x.message}`;copy.append(strong,detail);duration.className="audit-duration";duration.textContent=`${x.duration_ms} MS`;row.append(mark,copy,duration);list.append(row)})}
-function detectThresholds(d){const p=d.pc||{},next={thermal:Number.isFinite(p.gpu_temperature_c)&&p.gpu_temperature_c>=82,disk:Number.isFinite(p.disk_free_gb)&&p.disk_free_gb<20};if(next.thermal&&!thresholdState.thermal){incidentCount++;addLog("Alerte thermique","error",`GPU · ${p.gpu_temperature_c}°C`);notify(`GPU chaud · ${p.gpu_temperature_c}°C`)}if(next.disk&&!thresholdState.disk){incidentCount++;addLog("Espace disque faible","error",`C: · ${p.disk_free_gb} GB libres`);notify(`Disque presque plein · ${p.disk_free_gb} GB libres`)}thresholdState=next}
-function stateOf(d){const p=d.pc||{};return{online:!!d.online,bridge:!!d.control_ready,parsec:!!p.parsec_ready,fans:!!p.fan_control,codex:!!p.codex,mode:p.mode||"offline"}}
-function detectChanges(d){const next=stateOf(d);if(previousState){const labels={online:"PC",bridge:"Pont Windows",parsec:"Parsec",fans:"FanControl",codex:"Codex"};Object.keys(labels).forEach(k=>{if(next[k]!==previousState[k]){const up=next[k],detail=`${labels[k]} · ${up?"DISPONIBLE":"INDISPONIBLE"}`;if(!up)incidentCount++;addLog("Changement détecté",up?"success":"error",detail);notify(detail)}});if(next.mode!==previousState.mode)addLog("Profil modifié","success",`MODE · ${String(next.mode).toUpperCase()}`)}previousState=next}
-function acceptStatus(d,source="poll"){lastSync=Date.now();statusEvents++;if(d.online)onlineEvents++;recordSample(d,source);pushHistory(d);render(d);renderRoute(d);detectChanges(d);detectThresholds(d);renderSession();maybeAutoRepair(d);return d}
-function render(d){data=d;const pc=d.pc,on=!!d.online,ready=!!d.control_ready,checks=readiness(d),count=checks.filter(Boolean).length;
- $("#device").textContent=pc?.computer||"GTOL";$("#score").textContent=`${count}/6`;$("#scoreLabel").textContent=count===6?"SESSION PRÊTE":count>=4?"PRESQUE PRÊT":on?"INTERVENTION":"HORS LIGNE";
- $$("#meter i").forEach((i,n)=>i.className=checks[n]?"on":"");$("#smartAction").textContent=on?"Préparer la session":"Allumer et préparer";$("#smartNote").textContent=on?"Vérifie et répare automatiquement":"Réveille Windows puis prépare tout";
- if(ready)setMessage("GTOL opérationnel",d.message||"Le pont Windows répond.","on");else if(on)setMessage("GTOL partiellement joignable",d.message||"Le pont Windows ne répond pas.","warn");else setMessage("GTOL hors ligne",d.message||"La tour est arrêtée.");
- metric("cpu",Number.isFinite(pc?.cpu_load_percent)?`${pc.cpu_load_percent}%`:"—","CHARGE",pc?.cpu_load_percent);metric("gpu",Number.isFinite(pc?.gpu_load_percent)?`${pc.gpu_load_percent}%`:"—","CHARGE",pc?.gpu_load_percent);metric("temp",Number.isFinite(pc?.gpu_temperature_c)?`${pc.gpu_temperature_c}°C`:"—","GPU",Number.isFinite(pc?.gpu_temperature_c)?pc.gpu_temperature_c:0);metric("memory",Number.isFinite(pc?.memory_free_gb)?`${pc.memory_free_gb} GB`:"—","RAM LIBRE",pc?.memory_used_percent);metric("disk",Number.isFinite(pc?.disk_free_gb)?`${pc.disk_free_gb} GB`:"—","DISQUE LIBRE",pc?.disk_used_percent);metric("uptime",pc?duration(pc.uptime_minutes):"—","UPTIME",0);
- service("bridge",ready,ready?"Pont Windows prêt":"Pont Windows indisponible",on?"SSH local sécurisé":"PC hors ligne");service("parsec",!!pc?.parsec_ready,pc?.parsec_ready?"Parsec prêt":pc?.parsec_host?"Parsec à partager":"Parsec arrêté",pc?.parsec_daemon?"Démon actif":"Démon absent");service("codex",!!pc?.codex,pc?.codex?"Codex ouvert":"Codex fermé","Session distante");service("fans",!!pc?.fan_control,pc?.fan_control?"FanControl actif":"Courbes BIOS seules","Contrôle thermique");
- $("#powerState").className=`chip ${on?"on":""}`;$("#powerState").textContent=on?"PC EN LIGNE":"PC HORS LIGNE";$("#gatewayState").className="chip on";$("#gatewayState").textContent="RASPBERRY OK";$("#watchdogState").className=`chip ${d.gateway?.watchdog_suspended?"":"on"}`;$("#watchdogState").textContent=d.gateway?.watchdog_suspended?"WATCHDOG PAUSE":"WATCHDOG ARMÉ";$("#gatewayUptime").textContent=`UPTIME PI · ${duration(d.gateway?.uptime_minutes)}`;$("#profileState").textContent=pc?`${pc.mode==="night"?"NUIT":"NORMAL"} · ${pc.power||"PLAN INCONNU"}`:"PC INDISPONIBLE";
- disable($("#wake"),on);$$("[data-online]",app).forEach(b=>disable(b,!on));$$("[data-mode]",app).forEach(b=>{const active=b.dataset.mode===pc?.mode;b.classList.toggle("active",active);b.setAttribute("aria-pressed",String(active));disable(b,!ready||active)});
- recommendations(d);diagnostics(d);fresh()}
-function recommendations(d){const box=$("#recommendations");box.textContent="";const pc=d.pc,recs=[];if(!d.online)recs.push(["Réveiller GTOL","Le PC ne répond pas","wake"]);else{if(!d.control_ready)recs.push(["Retester le pont","Windows répond mais pas le contrôle","refresh"]);if(!pc?.parsec_ready)recs.push(["Préparer Parsec","L’hôte distant n’est pas prêt","share-parsec"]);if(!pc?.fan_control)recs.push(["Relancer FanControl","Windows utilise les courbes BIOS","repair-fans"]);if(!pc?.codex)recs.push(["Ouvrir Codex","La session Codex est fermée","launch-codex"]);if(pc?.mode==="night")recs.push(["Revenir en normal","Le profil nuit est actif","normal"]);if(Number.isFinite(pc?.disk_used_percent)&&pc.disk_used_percent>90)recs.push(["Libérer le disque",`Disque utilisé à ${pc.disk_used_percent}%`,"report"])}if(!recs.length){box.innerHTML='<p class="all-good">Aucune intervention recommandée.</p>';return}recs.slice(0,3).forEach(([title,note,action])=>{const row=document.createElement("div");row.className="recommendation";const copy=document.createElement("span");copy.className="recommendation-copy";const strong=document.createElement("strong");strong.textContent=title;const small=document.createElement("span");small.textContent=note;copy.append(strong,small);const b=document.createElement("button");b.className="mini remote";b.type="button";b.textContent=action==="report"?"Copier l’état":"Exécuter";b.disabled=busy;b.addEventListener("click",()=>action==="wake"?wake():action==="refresh"?refresh():action==="report"?copyReport():control(action,names[action]));row.append(copy,b);box.append(row)})}
-function scanChecks(d){const p=d?.pc||{};return[["Internet",navigator.onLine!==false],["Flux temps réel",streamActive],["Raspberry",!!d?.gateway],["Watchdog",!d?.gateway?.watchdog_suspended],["PC",!!d?.online],["Pont Windows",!!d?.control_ready],["Parsec",!!p.parsec_ready],["FanControl",!!p.fan_control],["Codex",!!p.codex],["Stockage",!Number.isFinite(p.disk_free_gb)||p.disk_free_gb>=20]]}
-function diagnostics(d){const rows=scanChecks(d),score=rows.filter(x=>x[1]).length;$("#diagScore").textContent=`${score}/10`;const box=$("#diagnostics");box.textContent="";rows.forEach(([a,ok])=>{const row=document.createElement("div"),name=document.createElement("b"),value=document.createElement("span");row.className="check";name.textContent=a;value.textContent=ok?"OK":"CHECK";row.append(name,value);box.append(row)})}
-function lock(reason=""){stopLive("pause");localStorage.removeItem(KEY);key="";app.hidden=true;gate.hidden=false;field.value="";field.setAttribute("aria-invalid",String(!!reason));gateError.textContent=reason;setTimeout(()=>field.focus(),0)}
-async function refresh(silent=false){if(refreshing||(busy&&silent&&!macro&&!wakeUntil))return data;refreshing=true;if(!silent){setBusy(true);setMessage("Synchronisation","Lecture de l’état complet…","warn")}try{return acceptStatus(await api("/api/status"),"poll")}catch(e){if(e.unauthorized){lock(e.message);return}if(!silent)setMessage("Connexion impossible",e.message,"warn");throw e}finally{refreshing=false;if(!silent)setBusy(false)}}
-function stopLive(mode="pause"){clearTimeout(reconnectTimer);reconnectTimer=0;if(streamAbort){streamAbort.abort();streamAbort=null}setLiveState(mode)}
-function scheduleLive(){if(!key||document.hidden||navigator.onLine===false||localStorage.getItem(AUTO)==="false")return;clearTimeout(reconnectTimer);reconnectTimer=setTimeout(connectLive,streamBackoff);streamBackoff=Math.min(16000,Math.round(streamBackoff*1.8))}
-async function connectLive(){if(streamAbort||!key||document.hidden||navigator.onLine===false||localStorage.getItem(AUTO)==="false")return;const controller=new AbortController();streamAbort=controller;setLiveState("connecting");try{const r=await fetch("/api/events",{cache:"no-store",headers:{Authorization:`Bearer ${key}`},signal:controller.signal});if(r.status===401){const e=Error("Clé d’accès refusée.");e.unauthorized=true;throw e}if(!r.ok||!r.body)throw Error("Flux temps réel indisponible.");setLiveState("live");streamBackoff=1200;const reader=r.body.getReader(),decoder=new TextDecoder();let buffer="";while(true){const part=await reader.read();if(part.done)break;buffer+=decoder.decode(part.value,{stream:true});let cut;while((cut=buffer.indexOf("\n\n"))>=0){const frame=buffer.slice(0,cut);buffer=buffer.slice(cut+2);const line=frame.split("\n").find(x=>x.startsWith("data: "));if(line){try{acceptStatus(JSON.parse(line.slice(6)),"live")}catch{}}}}}catch(e){if(e.unauthorized)return lock(e.message);if(e.name!=="AbortError"){reconnects++;renderSession();setLiveState("connecting")}}finally{if(streamAbort===controller)streamAbort=null;if(!controller.signal.aborted)scheduleLive()}}
-async function rawControl(action){return api("/api/control","POST",{action})}
-async function control(action,label){if(busy)return;setBusy(true);setMessage("Commande en cours",`${label}…`,"warn");const id=addLog(label,"pending","Commande envoyée");try{const out=await rawControl(action);updateLog(id,out.ok===false?"error":"success",out.message||"Terminé");await refresh(true);loadPersistent()}catch(e){if(e.unauthorized)return lock(e.message);updateLog(id,"error",e.message);setMessage("Échec de la commande",e.message,"warn")}finally{setBusy(false)}}
-async function wake(){if(busy||data?.online)return;setBusy(true);const id=addLog("Allumer GTOL","pending","Signal Wake-on-LAN");try{const out=await api("/api/wake","POST");updateLog(id,"success",out.message||"Signal envoyé");loadPersistent();wakeUntil=Date.now()+150000;await waitOnline()}catch(e){if(e.unauthorized)return lock(e.message);updateLog(id,"error",e.message);setMessage("Réveil impossible",e.message,"warn")}finally{setBusy(false)}}
-async function waitOnline(){while(Date.now()<wakeUntil){setMessage("Démarrage de GTOL","Windows est en cours de lancement…","warn");await sleep(5000);const d=await refresh(true).catch(()=>null);if(d?.online){wakeUntil=0;notify("GTOL est en ligne");return d}}wakeUntil=0;throw Error("GTOL ne répond pas encore.")}
-function setQueue(steps){const box=$("#queue");box.textContent="";steps.forEach((s,i)=>{const row=document.createElement("div");row.className="queue-step";row.id=`queue-${i}`;row.innerHTML=`<b>${String(i+1).padStart(2,"0")}</b><span></span><span>ATTENTE</span>`;row.children[1].textContent=s;box.append(row)});$("#queuePanel").hidden=false}
-function queueState(i,state){const row=$(`#queue-${i}`);row.className=`queue-step ${state}`;row.lastElementChild.textContent=state==="running"?"EN COURS":state==="done"?"TERMINÉ":"ERREUR"}
-async function prepare(kind){if(busy||macro)return;macro=true;setBusy(true);const steps=[],labels={full:"Préparation complète",parsec:"Préparation Parsec",performance:"Mission performance",recovery:"Récupération système"};if(!data?.online)steps.push(["Réveiller GTOL","wake"]);if(kind==="recovery")steps.push(["Réparer Parsec en profondeur","repair-parsec"],["Vérifier FanControl","repair-fans"],["Valider l’hôte Parsec","share-parsec"]);else{if(kind==="performance")steps.push(["Activer le profil normal","normal"]);steps.push(["Préparer Parsec","share-parsec"]);if(kind==="full"||kind==="performance")steps.push(["Vérifier FanControl","repair-fans"],["Ouvrir Codex","launch-codex"])}setQueue(steps.map(x=>x[0]));const log=addLog(labels[kind]||"Automatisation","pending",`${steps.length} étapes`);try{for(let i=0;i<steps.length;i++){const [label,action]=steps[i];queueState(i,"running");setMessage("Automatisation active",label,"warn");if(action==="wake"){await api("/api/wake","POST");wakeUntil=Date.now()+150000;await waitOnline()}else if(action==="share-parsec"&&data?.pc?.parsec_ready){}else if(action==="repair-fans"&&data?.pc?.fan_control){}else if(action==="launch-codex"&&data?.pc?.codex){}else if(action==="normal"&&data?.pc?.mode==="normal"){}else await rawControl(action);queueState(i,"done");await refresh(true)}updateLog(log,"success","Mission terminée");setMessage("Mission terminée","Tous les contrôles demandés sont validés.","on");notify(`${labels[kind]||"Automatisation"} terminée`)}catch(e){const running=$(".queue-step.running");if(running)running.className="queue-step error";updateLog(log,"error",e.message);setMessage("Automatisation interrompue",e.message,"warn")}finally{macro=false;setBusy(false)}}
-function maybeAutoRepair(d){if(localStorage.getItem(AUTOFIX)!=="true"||busy||macro||autoFixing||!d.online||!d.control_ready)return;const pc=d.pc||{},candidate=!pc.parsec_ready?["share-parsec","Partager Parsec"]:!pc.fan_control?["repair-fans","Réparer FanControl"]:null;if(!candidate||Date.now()-(fixCooldown[candidate[0]]||0)<300000)return;fixCooldown[candidate[0]]=Date.now();autoFixing=true;control(candidate[0],`Auto · ${candidate[1]}`).finally(()=>autoFixing=false)}
-function logs(){try{const v=JSON.parse(localStorage.getItem(LOG)||"[]");return Array.isArray(v)?v.slice(0,16):[]}catch{return[]}}function save(v){localStorage.setItem(LOG,JSON.stringify(v.slice(0,16)))}
-function addLog(label,state,detail){const x={id:`${Date.now()}${Math.random()}`,label,state,detail,time:Date.now()},v=[x,...logs()];save(v);renderLogs(v);return x.id}function updateLog(id,state,detail){const v=logs(),x=v.find(i=>i.id===id);if(x){x.state=state;x.detail=detail}save(v);renderLogs(v)}
-function renderLogs(v=logs()){const list=$("#timeline");list.textContent="";$("#timelineEmpty").hidden=!!v.length;$("#clearLog").hidden=!v.length;v.forEach(x=>{const row=document.createElement("li"),mark=document.createElement("i"),copy=document.createElement("span"),strong=document.createElement("strong"),detail=document.createElement("span"),time=document.createElement("time");mark.className=`state ${x.state==="success"?"on":x.state==="error"?"warn":""}`;copy.className="timeline-copy";strong.textContent=x.label;detail.textContent=x.detail;copy.append(strong,detail);time.dateTime=new Date(x.time).toISOString();time.textContent=new Date(x.time).toLocaleTimeString("fr-FR",{hour:"2-digit",minute:"2-digit"});row.append(mark,copy,time);list.append(row)})}
-function openConfirm(b){pending={action:b.dataset.action,label:names[b.dataset.action],trigger:b};const reboot=pending.action==="reboot";$("#dialogTitle").textContent=reboot?"Redémarrer GTOL ?":"Éteindre GTOL ?";$("#dialogText").textContent=reboot?"Windows ferme les applications puis redémarre. Parsec sera interrompu temporairement.":"Windows passe en hibernation. Le réveil Wake-on-LAN restera disponible.";$("#dialogConfirm").textContent=reboot?"Redémarrer":"Éteindre";dialog.showModal()}
-function closeDialog(){dialog.close();pending?.trigger?.focus()}
-function fresh(){if(!lastSync)return;const s=Math.floor((Date.now()-lastSync)/1000);$("#lastSync").textContent=s<5?"MAINTENANT":`IL Y A ${s} S`;$("#latency").textContent=`${latency} MS`}
-function report(){const pc=data?.pc,availability=statusEvents?Math.round((onlineEvents/statusEvents)*100):0;return[`GTOL CONTROL CENTER · BLACKBOX — ${new Date().toLocaleString("fr-FR")}`,`SCORE: ${data?scanChecks(data).filter(x=>x[1]).length:0}/10`,`PC: ${data?.online?"ONLINE":"OFFLINE"}`,`PONT: ${data?.control_ready?"READY":"DOWN"}`,`PARSEC: ${pc?.parsec_ready?"READY":"CHECK"}`,`CODEX: ${pc?.codex?"OPEN":"CLOSED"}`,`FANCONTROL: ${pc?.fan_control?"ACTIVE":"CHECK"}`,`CPU: ${pc?.cpu_load_percent??"—"}%`,`GPU: ${pc?.gpu_load_percent??"—"}% · ${pc?.gpu_temperature_c??"—"}°C`,`RAM LIBRE: ${pc?.memory_free_gb??"—"} GB`,`DISQUE LIBRE: ${pc?.disk_free_gb??"—"} GB`,`MODE: ${pc?.mode||"—"}`,`LATENCE: ${latency} MS`,`TRANSPORT: ${streamActive?"SSE LIVE":"FALLBACK"}`,`DISPONIBILITÉ SESSION: ${availability}%`,`SLA PERSISTANT ${summaryHours()}H: ${serverSummary?.availability??"—"}% · ${serverSummary?.incidents??0} INCIDENT(S)`,`ÉVÉNEMENTS: ${statusEvents} · INCIDENTS: ${incidentCount} · RECONNEXIONS: ${reconnects}`].join("\n")}
-async function copyReport(){try{await navigator.clipboard.writeText(report());$("#copyReport").textContent="Copié";setTimeout(()=>$("#copyReport").textContent="Copier",1600)}catch{addLog("Copie du diagnostic","error","Presse-papiers indisponible")}}
-async function shareReport(){const text=report();if(navigator.share)try{await navigator.share({title:"GTOL Blackbox",text});return}catch(e){if(e.name==="AbortError")return}await copyReport()}
-function exportBlackbox(){const payload={generated_at:new Date().toISOString(),build:8,status:data,summary:serverSummary,session:{started_at:new Date(sessionStart).toISOString(),events:statusEvents,incidents:incidentCount,reconnects,availability_percent:statusEvents?Math.round((onlineEvents/statusEvents)*100):0},persistent_history:serverHistory,shared_audit:sharedAudit,local_history:historyData(),local_activity:logs()};const blob=new Blob([JSON.stringify(payload,null,2)],{type:"application/json"}),url=URL.createObjectURL(blob),a=document.createElement("a");a.href=url;a.download=`gtol-blackbox-${new Date().toISOString().replace(/[:.]/g,"-")}.json`;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);addLog("Blackbox exportée","success",`${payload.persistent_history.length} points persistants`)}
-function notify(text){if(localStorage.getItem(NOTIFY)==="true"&&window.Notification?.permission==="granted")new Notification("GTOL Control Center",{body:text})}
-async function toggleNotify(checked){if(checked&&window.Notification){const p=Notification.permission==="default"?await Notification.requestPermission():Notification.permission;checked=p==="granted"}localStorage.setItem(NOTIFY,String(checked));$("#notifyToggle").checked=checked}
-async function toggleVigil(checked){if(!checked){localStorage.setItem(VIGIL,"false");await wakeLock?.release?.();wakeLock=null;$("#vigilToggle").checked=false;return}try{if(!navigator.wakeLock)throw Error();wakeLock=await navigator.wakeLock.request("screen");localStorage.setItem(VIGIL,"true");$("#vigilToggle").checked=true;wakeLock.addEventListener("release",()=>{wakeLock=null;if(!document.hidden&&localStorage.getItem(VIGIL)==="true")$("#vigilToggle").checked=false},{once:true});addLog("Mode vigie","success","Écran maintenu actif")}catch{localStorage.setItem(VIGIL,"false");$("#vigilToggle").checked=false;addLog("Mode vigie","error","Non supporté sur ce navigateur")}}
-function network(){const off=navigator.onLine===false;$("#offline").hidden=!off;if(off){setMessage("Connexion Internet coupée","Les commandes sont suspendues.","warn");stopLive("pause")}$$(".remote",app).forEach(b=>b.disabled=off||busy||b.dataset.off==="true");renderSignal()}
-function shortcut(){const action=new URLSearchParams(location.search).get("do");if(!action)return;history.replaceState(null,"","/");if(action==="prepare")return prepare("full");if(action==="wake")return wake();const b=$(`[data-action="${CSS.escape(action)}"]`,app);if(b&&!b.disabled&&!b.dataset.confirm)b.click()}
-function unlock(v){key=v.trim();if(!key){field.setAttribute("aria-invalid","true");gateError.textContent="Saisis la clé d’accès.";return field.focus()}localStorage.setItem(KEY,key);gate.hidden=true;app.hidden=false;refresh().then(()=>{connectLive();loadPersistent();shortcut()}).catch(()=>{})}
-const commands=[["prepare","Session complète","Réveil, Parsec, ventilateurs et Codex"],["performance","Mission performance","Profil normal et services complets"],["recovery","Récupération système","Réparation profonde Parsec et ventilateurs"],["wake","Allumer GTOL","Wake-on-LAN vérifié"],["share-parsec","Préparer Parsec","Garantir l’accès distant"],["launch-codex","Ouvrir Codex","Lancer la session distante"],["repair-fans","Réparer FanControl","Restaurer les courbes thermiques"],["normal","Mode normal","Restaurer le profil complet"],["night","Mode nuit","Réduire la présence de la tour"],["scan","Diagnostic 10 points","Relire tous les contrôles"],["export","Exporter la Blackbox","Télécharger l’état sans aucune clé"],["reboot","Redémarrer Windows","Confirmation obligatoire"],["hibernate","Éteindre avec WOL","Confirmation obligatoire"]];
-function commandAvailable(id){if(["prepare","performance","recovery","scan","export"].includes(id))return true;if(id==="wake")return !data?.online;const b=$(`[data-action="${CSS.escape(id)}"]`,app);return !!b&&!b.disabled}
-function renderCommands(query=""){const list=$("#commandList");list.textContent="";const q=query.trim().toLocaleLowerCase("fr");const found=commands.filter(x=>`${x[1]} ${x[2]}`.toLocaleLowerCase("fr").includes(q));$("#commandEmpty").hidden=!!found.length;found.forEach(([id,title,note],index)=>{const b=document.createElement("button"),copy=document.createElement("span"),strong=document.createElement("strong"),small=document.createElement("span"),keyHint=document.createElement("span");b.className="command-item";b.type="button";b.disabled=!commandAvailable(id);copy.className="command-copy";strong.textContent=title;small.textContent=note;keyHint.className="command-key";keyHint.textContent=String(index+1).padStart(2,"0");copy.append(strong,small);b.append(copy,keyHint);b.addEventListener("click",()=>runCommand(id));list.append(b)})}
-function openPalette(){if(app.hidden)return;renderCommands();palette.showModal();$("#commandSearch").value="";setTimeout(()=>$("#commandSearch").focus(),0)}
-function runCommand(id){palette.close();if(id==="prepare")return prepare("full");if(id==="performance"||id==="recovery")return prepare(id);if(id==="wake")return wake();if(id==="scan")return runScan();if(id==="export")return exportBlackbox();const b=$(`[data-action="${CSS.escape(id)}"]`,app);if(b&&!b.disabled)b.click()}
-async function runScan(){try{await refresh();const score=scanChecks(data).filter(x=>x[1]).length;addLog("Diagnostic 10 points",score===10?"success":"error",`${score}/10 contrôles validés`);$("#diagScore").textContent=`${score}/10`;}catch{}}
-const linkKey=new URLSearchParams(location.hash.slice(1)).get("k");if(linkKey?.trim()){key=linkKey.trim();localStorage.setItem(KEY,key);history.replaceState(null,"",location.pathname+location.search)}navigator.storage?.persist?.().catch(()=>{});
-$("#unlock").addEventListener("submit",e=>{e.preventDefault();unlock(field.value)});field.addEventListener("input",()=>{field.setAttribute("aria-invalid","false");gateError.textContent=""});$("#refresh").addEventListener("click",()=>refresh().catch(()=>{}));$("#bridgeFix").addEventListener("click",()=>refresh().catch(()=>{}));$("#install").addEventListener("click",async()=>{if(!installPrompt)return;installPrompt.prompt();await installPrompt.userChoice;installPrompt=null;$("#install").hidden=true});$("#smartAction").addEventListener("click",()=>prepare("full"));$("#macroFull").addEventListener("click",()=>prepare("full"));$("#macroParsec").addEventListener("click",()=>prepare("parsec"));$("#macroPerformance").addEventListener("click",()=>prepare("performance"));$("#macroRecovery").addEventListener("click",()=>prepare("recovery"));$("#wake").addEventListener("click",wake);$("#commandButton").addEventListener("click",openPalette);
-$$("[data-action]",app).forEach(b=>b.addEventListener("click",()=>b.dataset.confirm?openConfirm(b):control(b.dataset.action,names[b.dataset.action]||b.textContent.trim())));
-$("#autoToggle").checked=localStorage.getItem(AUTO)!=="false";$("#autoToggle").addEventListener("change",e=>{localStorage.setItem(AUTO,String(e.target.checked));e.target.checked?connectLive():stopLive("pause")});$("#notifyToggle").checked=localStorage.getItem(NOTIFY)==="true";$("#notifyToggle").addEventListener("change",e=>toggleNotify(e.target.checked));$("#autofixToggle").checked=localStorage.getItem(AUTOFIX)==="true";$("#autofixToggle").addEventListener("change",e=>localStorage.setItem(AUTOFIX,String(e.target.checked)));$("#vigilToggle").checked=false;$("#vigilToggle").addEventListener("change",e=>toggleVigil(e.target.checked));$("#runScan").addEventListener("click",runScan);$("#copyReport").addEventListener("click",copyReport);$("#shareReport").addEventListener("click",shareReport);$("#exportBlackbox").addEventListener("click",exportBlackbox);$("#resetHistory").addEventListener("click",loadPersistent);$$(".history-tab").forEach(b=>b.addEventListener("click",()=>{activeMetric=b.dataset.metric;renderHistory()}));$$(".range-tab").forEach(b=>b.addEventListener("click",()=>{historyMinutes=Number(b.dataset.minutes);serverHistory=[];renderHistory();loadPersistent()}));$("#clearLog").addEventListener("click",()=>{localStorage.removeItem(LOG);renderLogs([])});$("#forget").addEventListener("click",()=>lock());
-$("#dialogCancel").addEventListener("click",closeDialog);$("#dialogConfirm").addEventListener("click",()=>{if(!pending)return;const p=pending;pending=null;dialog.close();control(p.action,p.label)});dialog.addEventListener("click",e=>{if(e.target===dialog)closeDialog()});dialog.addEventListener("close",()=>pending?.trigger?.focus());$("#commandClose").addEventListener("click",()=>palette.close());$("#commandSearch").addEventListener("input",e=>renderCommands(e.target.value));palette.addEventListener("click",e=>{if(e.target===palette)palette.close()});
-addEventListener("keydown",e=>{if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==="k"){e.preventDefault();palette.open?palette.close():openPalette()}});addEventListener("beforeinstallprompt",e=>{e.preventDefault();installPrompt=e;$("#install").hidden=false});addEventListener("online",()=>{network();if(key){refresh(true).catch(()=>{});connectLive()}});addEventListener("offline",network);navigator.connection?.addEventListener?.("change",renderSignal);document.addEventListener("visibilitychange",()=>{if(document.hidden)stopLive("pause");else if(key){refresh(true).catch(()=>{});connectLive();if(localStorage.getItem(VIGIL)==="true")toggleVigil(true)}});
-setInterval(()=>{fresh();renderSession()},1000);setInterval(()=>{if(!document.hidden&&key&&!busy&&!streamActive&&localStorage.getItem(AUTO)!=="false")refresh(true).catch(()=>{})},30000);setInterval(()=>{if(!document.hidden&&key)loadPersistent()},60000);navigator.serviceWorker?.register("/sw.js",{updateViaCache:"none"}).catch(()=>{});
-renderLogs();renderSignal();renderHistory();renderSession();renderObservatory();renderAudit();network();if(key){gate.hidden=true;app.hidden=false;refresh().then(()=>{connectLive();loadPersistent();shortcut()}).catch(()=>{})}
+const $=(s,r=document)=>r.querySelector(s);
+const KEY="pcControlKey";
+const gate=$("#gate"),app=$("#app"),field=$("#key"),gateErr=$("#gateErr"),busy=$("#busy"),toastEl=$("#toast");
+let key=localStorage.getItem(KEY)||"";
+let data=null, tab="home", stream=null, streamStop=null, toastTimer=0;
+let screenTimer=0, screenAuto=false, lastMonitor=-1, monitors=[], reqBusy=0;
+let filePath="", clickMode="left";
+const H={};  // handlers per tab activation
+
+const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+const fmtDur=m=>{if(!Number.isFinite(m))return"—";const h=Math.floor(m/60),n=Math.round(m%60);return h?`${h}h${String(n).padStart(2,"0")}`:`${n}min`};
+const esc=s=>String(s).replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+function vibe(ms=8){try{navigator.vibrate&&navigator.vibrate(ms)}catch{}}
+function setBusy(on){reqBusy=Math.max(0,reqBusy+(on?1:-1));busy.classList.toggle("on",reqBusy>0)}
+function toast(text,bad){toastEl.textContent=text;toastEl.className="toast show"+(bad?" bad":"");clearTimeout(toastTimer);toastTimer=setTimeout(()=>toastEl.className="toast",2600)}
+
+async function api(path,method="GET",body){
+  const o={method,cache:"no-store",headers:{Authorization:"Bearer "+key}};
+  if(body){o.headers["Content-Type"]="application/json";o.body=JSON.stringify(body)}
+  let r;try{r=await fetch(path,o)}catch{throw Error("Pas de réseau")}
+  const d=await r.json().catch(()=>({}));
+  if(r.status===401){const e=Error("Clé refusée");e.un=true;throw e}
+  if(!r.ok)throw Error(d.error||"Action impossible");
+  return d;
+}
+// Action riche vers le PC. Lève si le PC est hors ligne / pont muet.
+async function act(action,args,quiet){
+  if(!quiet)setBusy(true);
+  try{return await api("/api/action","POST",{action,args:args||{}})}
+  catch(e){if(e.un)return lock("Clé refusée");if(!quiet)toast(e.message,true);throw e}
+  finally{if(!quiet)setBusy(false)}
+}
+
+function lock(reason){stopStream();localStorage.removeItem(KEY);key="";app.hidden=true;gate.hidden=false;field.value="";gateErr.textContent=reason||"";setTimeout(()=>field.focus(),0)}
+function unlock(v){key=(v||"").trim();if(!key){gateErr.textContent="Saisis la clé.";return}localStorage.setItem(KEY,key);gate.hidden=true;app.hidden=false;start()}
+
+/* ---------- Statut temps réel (SSE) ---------- */
+function start(){refresh();connectStream();switchTab(tab)}
+async function refresh(){try{apply(await api("/api/status"))}catch(e){if(e.un)lock(e.message)}}
+function connectStream(){
+  if(stream)return;
+  const ctrl=new AbortController();streamStop=()=>ctrl.abort();
+  fetch("/api/events",{cache:"no-store",headers:{Authorization:"Bearer "+key},signal:ctrl.signal}).then(async r=>{
+    if(r.status===401)return lock("Clé refusée");
+    if(!r.ok||!r.body)throw 0;
+    stream=r;const rd=r.body.getReader(),dec=new TextDecoder();let buf="";
+    while(true){const p=await rd.read();if(p.done)break;buf+=dec.decode(p.value,{stream:true});let i;
+      while((i=buf.indexOf("\n\n"))>=0){const f=buf.slice(0,i);buf=buf.slice(i+2);const l=f.split("\n").find(x=>x.startsWith("data: "));if(l){try{apply(JSON.parse(l.slice(6)))}catch{}}}}
+  }).catch(()=>{}).finally(()=>{stream=null;if(key&&!document.hidden)setTimeout(connectStream,2000)});
+}
+function stopStream(){if(streamStop)streamStop();stream=null}
+
+function apply(d){data=d;const pc=d.pc||null,on=!!d.online,ready=!!d.control_ready;
+  $("#device").textContent=pc?.computer||"GTOL";
+  const dot=$("#hdot");dot.className="dot "+(ready?"on":on?"warn":"off");
+  $("#hstate").textContent=ready?"En ligne":on?"Pont muet":"Éteinte";
+  if(tab==="home")renderHome(d);
+}
+
+/* ---------- Onglet Accueil ---------- */
+function metric(id,val,pct,hot){const e=$("#m_"+id);if(!e)return;e.querySelector(".val").textContent=val;const b=e.querySelector("i");if(b){b.style.width=(Number.isFinite(pct)?clamp(pct,0,100):0)+"%";b.classList.toggle("hot",!!hot)}}
+function renderHome(d){
+  const pc=d.pc||{},on=!!d.online,ready=!!d.control_ready;
+  $("#homeMsg").textContent=d.message||(on?"Tour en ligne":"Tour éteinte");
+  $("#homeMsg").previousElementSibling.className="dot "+(ready?"on":on?"warn":"off");
+  metric("cpu",Number.isFinite(pc.cpu_load_percent)?pc.cpu_load_percent+"%":"—",pc.cpu_load_percent);
+  metric("gpu",Number.isFinite(pc.gpu_load_percent)?pc.gpu_load_percent+"%":"—",pc.gpu_load_percent);
+  metric("temp",Number.isFinite(pc.gpu_temperature_c)?pc.gpu_temperature_c+"°":"—",pc.gpu_temperature_c,pc.gpu_temperature_c>=82);
+  metric("ram",Number.isFinite(pc.memory_free_gb)?pc.memory_free_gb+" Go":"—",pc.memory_used_percent);
+  metric("disk",Number.isFinite(pc.disk_free_gb)?pc.disk_free_gb+" Go":"—",pc.disk_used_percent,pc.disk_used_percent>=92);
+  metric("up",pc.uptime_minutes!=null?fmtDur(pc.uptime_minutes):"—",0);
+  $("#wakeBtn").hidden=on;$("#lockBtn").hidden=!on;
+  const nightOn=pc.mode==="night";
+  $("#modeNormal").classList.toggle("active",pc.mode==="normal");
+  $("#modeNight").classList.toggle("active",nightOn);
+  document.querySelectorAll("[data-need-on]").forEach(b=>b.disabled=!on);
+}
+
+/* ---------- Onglet Écran ---------- */
+function screenWidth(){const w=$("#screenImg")?.clientWidth||$("#screenWrap").clientWidth||720;return clamp(Math.round(w*(window.devicePixelRatio||1)),640,1920)}
+async function grabScreen(quiet){
+  if(!data?.online){$("#screenPh").textContent="Tour éteinte";return}
+  try{
+    const r=await act("Screenshot",{monitor:lastMonitor,width:screenWidth()},quiet);
+    if(!r?.image)return;
+    const img=$("#screenImg");img.src="data:image/jpeg;base64,"+r.image;img.hidden=false;$("#screenPh").hidden=true;
+    if(Array.isArray(r.monitors)&&r.monitors.length!==monitors.length){monitors=r.monitors;renderMonitors()}
+    else if(Array.isArray(r.monitors))monitors=r.monitors;
+  }catch{}
+}
+function renderMonitors(){
+  const box=$("#monitorSel");box.innerHTML="";
+  if(monitors.length<=1){box.hidden=true;return}
+  box.hidden=false;
+  const mk=(label,idx)=>{const b=document.createElement("button");b.textContent=label;b.className=lastMonitor===idx?"active":"";b.onclick=()=>{lastMonitor=idx;renderMonitors();grabScreen()};return b};
+  box.appendChild(mk("Tous",-1));
+  monitors.forEach((m,i)=>box.appendChild(mk("É"+(i+1)+(m.primary?"*":""),i)));
+}
+function screenTap(ev,longpress){
+  const img=$("#screenImg");if(img.hidden||!data?.online)return;
+  const rect=img.getBoundingClientRect();
+  const nx=clamp((ev.clientX-rect.left)/rect.width,0,1),ny=clamp((ev.clientY-rect.top)/rect.height,0,1);
+  const mark=document.createElement("div");mark.className="tap";mark.style.left=(ev.clientX-rect.left)+"px";mark.style.top=(ev.clientY-rect.top)+"px";
+  $("#screenWrap").appendChild(mark);setTimeout(()=>mark.remove(),400);vibe();
+  const button=longpress?"right":clickMode;const dbl=clickMode==="double"&&!longpress;
+  act("Click",{monitor:lastMonitor,nx,ny,button:button==="double"?"left":button,double:dbl},true).then(()=>setTimeout(()=>grabScreen(true),160)).catch(()=>{});
+}
+function startScreenAuto(){stopScreenAuto();if(!screenAuto)return;const loop=async()=>{if(tab!=="screen"||!screenAuto)return;await grabScreen(true);screenTimer=setTimeout(loop,1300)};screenTimer=setTimeout(loop,1300)}
+function stopScreenAuto(){clearTimeout(screenTimer);screenTimer=0}
+
+/* ---------- Onglet Fichiers ---------- */
+async function loadDir(path){
+  filePath=path;setBusy(true);
+  try{const r=await act("FsList",{path},true);renderDir(r)}
+  catch(e){$("#fileList").innerHTML='<p class="empty">'+esc(e.message)+"</p>"}
+  finally{setBusy(false)}
+}
+function renderDir(r){
+  const list=$("#fileList");list.innerHTML="";
+  $("#crumb").innerHTML=r.is_root?"<b>Disques</b>":crumbHtml(r.path);
+  $("#fileUp").disabled=r.is_root;
+  $("#fileActions").hidden=r.is_root;
+  if(!r.entries||!r.entries.length){list.innerHTML='<p class="empty">Dossier vide</p>';return}
+  for(const e of r.entries){
+    const b=document.createElement("button");b.className="item";
+    const ic=e.dir?"▸":fileIcon(e.name);
+    const size=e.dir?"":humanSize(e.size);
+    b.innerHTML=`<span class="ic">${e.dir?"📁":"📄"}</span><span class="nm"><b>${esc(e.name)}</b><span>${size}</span></span><span class="go">${e.dir?"›":"⋯"}</span>`;
+    b.onclick=()=>e.dir?loadDir(e.path):fileMenu(e);
+    list.appendChild(b);
+  }
+}
+function crumbHtml(p){const parts=p.replace(/\\+$/,"").split("\\");return parts.map((s,i)=>i===parts.length-1?`<b>${esc(s||p)}</b>`:esc(s)).join(" \\ ")}
+function fileIcon(n){return"📄"}
+function humanSize(b){if(b==null)return"";if(b<1024)return b+" o";if(b<1048576)return(b/1024).toFixed(0)+" Ko";if(b<1073741824)return(b/1048576).toFixed(1)+" Mo";return(b/1073741824).toFixed(2)+" Go"}
+async function fileMenu(e){
+  const choice=await pickAction(e.name,[
+    ["Aperçu texte","view"],["Télécharger","download"],["Ouvrir sur le PC","open"],["Supprimer","delete"]
+  ]);
+  if(choice==="view")return viewFile(e);
+  if(choice==="download")return downloadFile(e);
+  if(choice==="open")return act("OpenPath",{path:e.path}).then(r=>toast(r.message||"Ouvert")).catch(()=>{});
+  if(choice==="delete"){if(await confirmDlg("Supprimer ?",e.name)){await act("FsDelete",{path:e.path}).then(()=>{toast("Supprimé");loadDir(filePath)}).catch(()=>{})}}
+}
+async function viewFile(e){
+  try{const r=await act("FsRead",{path:e.path});textDlg(e.name,r.text)}
+  catch(err){toast(err.message,true)}
+}
+async function downloadFile(e){
+  try{const r=await act("FsDownload",{path:e.path});const bin=atob(r.content_base64);const arr=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++)arr[i]=bin.charCodeAt(i);
+    const url=URL.createObjectURL(new Blob([arr]));const a=document.createElement("a");a.href=url;a.download=r.name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1500);toast("Téléchargé")}
+  catch(err){toast(err.message,true)}
+}
+async function uploadFile(fileObj){
+  const buf=await fileObj.arrayBuffer();
+  if(buf.byteLength>1200000)return toast("Fichier trop lourd (max ~1 Mo)",true);
+  let bin="";const arr=new Uint8Array(buf);for(let i=0;i<arr.length;i++)bin+=String.fromCharCode(arr[i]);
+  const b64=btoa(bin);const target=(filePath.replace(/\\+$/,""))+"\\"+fileObj.name;
+  await act("FsWrite",{path:target,content_base64:b64}).then(()=>{toast("Envoyé");loadDir(filePath)}).catch(()=>{});
+}
+
+/* ---------- Onglet Système ---------- */
+async function loadSystem(){
+  try{
+    const [proc,drives,info]=await Promise.all([act("Processes",null,true),act("Drives",null,true),act("SessionInfo",null,true).catch(()=>null)]);
+    renderProc(proc.processes||[]);renderDrives(drives.drives||[]);renderApps(info?.apps||[]);
+  }catch(e){if(e.un)lock(e.message)}
+}
+function renderProc(list){
+  const box=$("#procList");box.innerHTML="";
+  if(!list.length){box.innerHTML='<p class="empty">—</p>';return}
+  list.slice(0,20).forEach(p=>{
+    const row=document.createElement("div");row.className="proc";
+    row.innerHTML=`<span class="nm"><b>${esc(p.name)}</b><span>${esc(p.window||"pid "+p.pid)}</span></span><span class="mem">${p.memory_mb} Mo</span>`;
+    const k=document.createElement("button");k.className="btn bad sm";k.textContent="Kill";k.style.width="auto";
+    k.onclick=async()=>{if(await confirmDlg("Arrêter ?",p.name)){await act("KillProcess",{pid:p.pid}).then(r=>{toast(r.message||"Arrêté");loadSystem()}).catch(()=>{})}};
+    row.appendChild(k);box.appendChild(row);
+  });
+}
+function renderDrives(list){
+  const box=$("#driveList");box.innerHTML="";
+  list.forEach(d=>{const row=document.createElement("div");row.className="kv";
+    row.innerHTML=`<span>${esc(d.name)} ${esc(d.label||d.type)}</span><b>${d.free_gb} / ${d.size_gb} Go · ${d.used_percent}%</b>`;box.appendChild(row)});
+}
+const APP_IC={chrome:"🌐",edge:"🌐",explorer:"🗂️",notepad:"📝",terminal:"⌨️",taskmgr:"📊",parsec:"🖥️",spotify:"🎵",steam:"🎮",discord:"💬",vscode:"🧩",fancontrol:"🌀"};
+function renderApps(list){
+  const box=$("#appList");box.innerHTML="";
+  if(!list.length){box.innerHTML='<p class="empty">Agent de session requis</p>';return}
+  list.forEach(a=>{const b=document.createElement("button");b.innerHTML=`<span class="ap-ic">${APP_IC[a.id]||"▶"}</span><span>${esc(a.name)}</span>`;
+    b.onclick=()=>act("Launch",{app:a.id}).then(r=>toast(r.message||"Lancé")).catch(()=>{});box.appendChild(b)});
+}
+
+/* ---------- Onglet Terminal ---------- */
+let termShell="powershell";
+function termWrite(html){const t=$("#termOut");t.insertAdjacentHTML("beforeend",html);t.scrollTop=t.scrollHeight}
+async function runCmd(cmd){
+  if(!cmd.trim())return;
+  termWrite(`<div class="cmd">${termShell==="cmd"?">":"PS>"} ${esc(cmd)}</div>`);
+  setBusy(true);
+  try{const r=await act("Exec",{command:cmd,shell:termShell},true);
+    if(r.stdout)termWrite(`<div>${esc(r.stdout)}</div>`);
+    if(r.stderr)termWrite(`<div class="err">${esc(r.stderr)}</div>`);
+    termWrite(`<div class="ok">— code ${r.exit_code}</div>`);
+  }catch(e){termWrite(`<div class="err">${esc(e.message)}</div>`)}
+  finally{setBusy(false)}
+}
+
+/* ---------- Navigation ---------- */
+function switchTab(name){
+  tab=name;
+  document.querySelectorAll(".view").forEach(v=>v.hidden=v.id!=="view-"+name);
+  document.querySelectorAll(".nav button").forEach(b=>b.classList.toggle("active",b.dataset.tab===name));
+  stopScreenAuto();
+  if(name==="home")renderHome(data||{});
+  if(name==="screen"){grabScreen();startScreenAuto()}
+  if(name==="files"&&!filePath)loadDir("");
+  else if(name==="files")loadDir(filePath);
+  if(name==="system")loadSystem();
+  if(name==="terminal")setTimeout(()=>$("#termIn").focus(),100);
+  window.scrollTo(0,0);
+}
+
+/* ---------- Dialogues ---------- */
+const dlg=$("#dlg");let dlgResolve=null;
+function closeDlg(v){if(dlgResolve){const r=dlgResolve;dlgResolve=null;r(v)}dlg.close()}
+function confirmDlg(title,text){return new Promise(res=>{dlgResolve=res;$("#dlgBody").innerHTML=`<h3>${esc(title)}</h3><p>${esc(text)}</p><div class="row two"><button class="btn" id="dlgNo">Annuler</button><button class="btn bad" id="dlgYes">Confirmer</button></div>`;dlg.showModal();$("#dlgNo").onclick=()=>closeDlg(false);$("#dlgYes").onclick=()=>closeDlg(true)})}
+function pickAction(title,options){return new Promise(res=>{dlgResolve=res;const btns=options.map(([l,v])=>`<button class="btn" data-v="${v}">${esc(l)}</button>`).join("");$("#dlgBody").innerHTML=`<h3>${esc(title)}</h3><div class="row">${btns}<button class="btn" data-v="">Fermer</button></div>`;dlg.showModal();$("#dlgBody").querySelectorAll("[data-v]").forEach(b=>b.onclick=()=>closeDlg(b.dataset.v||null))})}
+function textDlg(title,text){dlgResolve=null;$("#dlgBody").innerHTML=`<h3>${esc(title)}</h3><textarea readonly>${esc(text)}</textarea><button class="btn" id="dlgClose">Fermer</button>`;dlg.showModal();$("#dlgClose").onclick=()=>dlg.close()}
+dlg.addEventListener("cancel",()=>{if(dlgResolve)closeDlg(null)});
+
+/* ---------- Init & liaisons ---------- */
+$("#unlock").addEventListener("submit",e=>{e.preventDefault();unlock(field.value)});
+$("#refreshBtn").addEventListener("click",()=>{vibe();refresh();if(tab==="screen")grabScreen();if(tab==="system")loadSystem()});
+document.querySelectorAll(".nav button").forEach(b=>b.addEventListener("click",()=>{vibe();switchTab(b.dataset.tab)}));
+
+// Accueil : actions
+function bindAction(id,action,args,confirmTxt){const el=$("#"+id);if(!el)return;el.addEventListener("click",async()=>{vibe();if(confirmTxt&&!(await confirmDlg(el.textContent.trim(),confirmTxt)))return;act(action,args).then(r=>{toast(r.message||"OK");setTimeout(refresh,400)}).catch(()=>{})})}
+$("#wakeBtn").addEventListener("click",async()=>{vibe();try{const r=await api("/api/wake","POST");toast(r.message||"Signal envoyé");setTimeout(refresh,1500)}catch(e){if(e.un)lock(e.message);else toast(e.message,true)}});
+bindAction("lockBtn","Lock");
+async function legacy(action,confirmTxt,label){vibe();if(confirmTxt&&!(await confirmDlg(label,confirmTxt)))return;setBusy(true);try{const r=await api("/api/control","POST",{action});toast(r.message||"OK");setTimeout(refresh,600)}catch(e){if(e.un)lock(e.message);else toast(e.message,true)}finally{setBusy(false)}}
+$("#shareParsec").addEventListener("click",()=>legacy("share-parsec"));
+$("#modeNormal").addEventListener("click",()=>legacy("normal"));
+$("#modeNight").addEventListener("click",()=>legacy("night"));
+$("#repairFans").addEventListener("click",()=>legacy("repair-fans"));
+$("#launchCodex").addEventListener("click",()=>legacy("launch-codex"));
+$("#rebootBtn").addEventListener("click",()=>legacy("reboot","Windows redémarre. Parsec sera coupé un instant.","Redémarrer"));
+$("#hibernateBtn").addEventListener("click",()=>legacy("hibernate","Windows s'éteint. Le réveil Wake-on-LAN reste possible.","Éteindre"));
+bindAction("displaysOff","DisplaysOff");
+bindAction("displaysOn","DisplaysOn");
+
+// Écran : contrôles
+let pressTimer=0,pressed=false;
+const wrap=$("#screenWrap");
+wrap.addEventListener("pointerdown",e=>{pressed=false;pressTimer=setTimeout(()=>{pressed=true;screenTap(e,true)},500)});
+wrap.addEventListener("pointerup",e=>{clearTimeout(pressTimer);if(!pressed)screenTap(e,false)});
+wrap.addEventListener("pointercancel",()=>clearTimeout(pressTimer));
+document.querySelectorAll("[data-click]").forEach(b=>b.addEventListener("click",()=>{vibe();clickMode=b.dataset.click;document.querySelectorAll("[data-click]").forEach(x=>x.classList.toggle("active",x===b))}));
+$("#autoScreen").addEventListener("click",()=>{screenAuto=!screenAuto;$("#autoScreen").classList.toggle("active",screenAuto);$("#autoScreen").textContent=screenAuto?"Auto ●":"Auto ○";if(screenAuto)startScreenAuto();else stopScreenAuto()});
+$("#shotBtn").addEventListener("click",()=>{vibe();grabScreen()});
+$("#keyText").addEventListener("keydown",e=>{if(e.key==="Enter"){e.preventDefault();sendText(true)}});
+$("#keySend").addEventListener("click",()=>sendText(false));
+function sendText(enter){const v=$("#keyText").value;if(!v&&!enter)return;act("TypeText",{text:v,enter},true).then(()=>{$("#keyText").value="";setTimeout(()=>grabScreen(true),200)}).catch(()=>{})}
+document.querySelectorAll("[data-key]").forEach(b=>b.addEventListener("click",()=>{vibe();const mods=b.dataset.mods?b.dataset.mods.split(","):[];act("SendKey",{key:b.dataset.key,modifiers:mods},true).then(()=>setTimeout(()=>grabScreen(true),160)).catch(()=>{})}));
+document.querySelectorAll("[data-scroll]").forEach(b=>b.addEventListener("click",()=>{vibe();act("Scroll",{amount:parseInt(b.dataset.scroll,10)},true).then(()=>setTimeout(()=>grabScreen(true),160)).catch(()=>{})}));
+document.querySelectorAll("[data-media]").forEach(b=>b.addEventListener("click",()=>{vibe();act("Media",{command:b.dataset.media},true).then(r=>toast(r.message||"OK")).catch(()=>{})}));
+const volRange=$("#volRange");let volTimer=0;
+volRange.addEventListener("input",()=>{$("#volVal").textContent=volRange.value+"%";clearTimeout(volTimer);volTimer=setTimeout(()=>act("Volume",{level:parseInt(volRange.value,10)},true).catch(()=>{}),120)});
+
+// Fichiers
+$("#fileUp").addEventListener("click",()=>{if(data){}loadDir(parentPath(filePath))});
+function parentPath(p){const q=p.replace(/\\+$/,"");const i=q.lastIndexOf("\\");return i<=1?"":q.slice(0,i>2?i:3)}
+$("#fileRefresh").addEventListener("click",()=>loadDir(filePath));
+$("#newFolder").addEventListener("click",async()=>{const name=await promptDlg("Nouveau dossier","Nom");if(name){const target=filePath.replace(/\\+$/,"")+"\\"+name;await act("FsMkdir",{path:target}).then(()=>{toast("Créé");loadDir(filePath)}).catch(()=>{})}});
+$("#uploadInput").addEventListener("change",e=>{const f=e.target.files[0];if(f)uploadFile(f);e.target.value=""});
+function promptDlg(title,label){return new Promise(res=>{dlgResolve=res;$("#dlgBody").innerHTML=`<h3>${esc(title)}</h3><input id="dlgInput" placeholder="${esc(label)}" autocomplete="off"><div class="row two"><button class="btn" id="dlgNo">Annuler</button><button class="btn pri" id="dlgYes">OK</button></div>`;dlg.showModal();setTimeout(()=>$("#dlgInput").focus(),50);$("#dlgNo").onclick=()=>closeDlg(null);$("#dlgYes").onclick=()=>closeDlg($("#dlgInput").value.trim()||null)})}
+
+// Système
+$("#sysRefresh").addEventListener("click",()=>{vibe();loadSystem()});
+
+// Terminal
+document.querySelectorAll("[data-shell]").forEach(b=>b.addEventListener("click",()=>{termShell=b.dataset.shell;document.querySelectorAll("[data-shell]").forEach(x=>x.classList.toggle("active",x===b))}));
+$("#termForm").addEventListener("submit",e=>{e.preventDefault();const v=$("#termIn").value;$("#termIn").value="";runCmd(v)});
+$("#termClear").addEventListener("click",()=>$("#termOut").innerHTML="");
+
+document.addEventListener("visibilitychange",()=>{if(document.hidden){stopStream();stopScreenAuto()}else if(key){connectStream();refresh();if(tab==="screen"){grabScreen();startScreenAuto()}}});
+const hashKey=new URLSearchParams(location.hash.slice(1)).get("k");if(hashKey?.trim()){key=hashKey.trim();localStorage.setItem(KEY,key);history.replaceState(null,"",location.pathname)}
+navigator.storage?.persist?.().catch(()=>{});
+navigator.serviceWorker?.register("/sw.js",{updateViaCache:"none"}).catch(()=>{});
+if(key){gate.hidden=true;app.hidden=false;start()}else field.focus();
 })();
 """
 
 BODY = r"""
-<div class="offline" id="offline" role="status" hidden>CONNEXION INTERNET COUPÉE · COMMANDES SUSPENDUES</div><div class="busybar" id="busybar" aria-hidden="true" hidden></div>
-<main class="shell gate" id="gate"><section class="login" aria-labelledby="loginTitle"><div class="brand"><span class="brand-mark" aria-hidden="true">GT</span><span class="brand-copy"><strong>GTOL Control Center</strong><span>Accès privé</span></span></div><p class="eyebrow">REMOTE SYSTEM / AUTH</p><h1 id="loginTitle">Contrôle total.<br>Accès privé.</h1><p>Une seule clé. Aucune commande arbitraire. Tout le contrôle distant essentiel.</p><form id="unlock" novalidate><label class="label" for="key">CLÉ D’ACCÈS</label><input class="key" id="key" name="access-key" type="password" autocomplete="current-password" spellcheck="false" autocapitalize="off" enterkeyhint="go" placeholder="Colle ta clé privée" aria-describedby="gateError"><button class="login-submit" type="submit">OUVRIR LE CONTROL CENTER</button><p class="gate-error" id="gateError" role="alert"></p></form><p class="security">La clé reste sur cet appareil. Le serveur n’accepte qu’une liste fermée d’actions.</p></section></main>
-<main class="shell" id="app" aria-busy="false" hidden>
- <header class="topbar"><div class="brand"><span class="brand-mark" aria-hidden="true">GT</span><span class="brand-copy"><strong>GTOL Control Center</strong><span>Windows / Raspberry / Parsec</span></span></div><div class="top-actions"><span class="chip" id="liveState" role="status">CONNEXION</span><button class="btn" id="commandButton" type="button" aria-label="Ouvrir la palette de commandes"><span class="command-label">COMMANDES · </span>CTRL K</button><button class="btn" id="install" type="button" hidden><span class="install-label">INSTALLER</span> ↓</button><button class="icon-btn" id="refresh" type="button" aria-label="Actualiser l’état">↻</button></div></header>
- <section class="hero" aria-labelledby="device"><div class="hero-grid"><div><p class="eyebrow">PRIMARY SYSTEM / <span id="statusTitle">SYNCHRONISATION</span></p><h1 id="device">GTOL</h1><p class="hero-message" id="statusText" aria-live="polite">Lecture de l’état complet…</p><div class="fresh"><span id="lastSync">JAMAIS SYNCHRONISÉ</span><span id="latency">— MS</span><span class="state warn" id="statusDot" aria-hidden="true"></span></div></div><aside class="scorebox" aria-label="Disponibilité de la session"><div class="score-head"><strong class="score" id="score">0/6</strong><span class="score-label" id="scoreLabel">ANALYSE</span></div><div class="meter" id="meter" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i></div><button class="primary remote" id="smartAction" type="button">PRÉPARER LA SESSION</button><p class="score-note" id="smartNote">Vérifie et répare automatiquement</p></aside></div></section>
- <div class="layout"><div class="maincol">
-  <section aria-labelledby="telemetryTitle"><div class="section-head"><h2 id="telemetryTitle">Télémétrie</h2><p>CAPTEURS WINDOWS EN DIRECT</p></div><div class="block metrics"><article class="metric"><span class="metric-label">CPU</span><strong class="metric-value" id="cpuValue">—</strong><span class="metric-note" id="cpuNote">CHARGE</span><span class="metric-track" aria-hidden="true"><i class="metric-fill" id="cpuFill"></i></span></article><article class="metric"><span class="metric-label">GPU</span><strong class="metric-value" id="gpuValue">—</strong><span class="metric-note" id="gpuNote">CHARGE</span><span class="metric-track" aria-hidden="true"><i class="metric-fill" id="gpuFill"></i></span></article><article class="metric"><span class="metric-label">TEMPÉRATURE</span><strong class="metric-value" id="tempValue">—</strong><span class="metric-note" id="tempNote">GPU</span><span class="metric-track" aria-hidden="true"><i class="metric-fill" id="tempFill"></i></span></article><article class="metric"><span class="metric-label">MÉMOIRE</span><strong class="metric-value" id="memoryValue">—</strong><span class="metric-note" id="memoryNote">RAM LIBRE</span><span class="metric-track" aria-hidden="true"><i class="metric-fill" id="memoryFill"></i></span></article><article class="metric"><span class="metric-label">DISQUE C</span><strong class="metric-value" id="diskValue">—</strong><span class="metric-note" id="diskNote">LIBRE</span><span class="metric-track" aria-hidden="true"><i class="metric-fill" id="diskFill"></i></span></article><article class="metric"><span class="metric-label">UPTIME</span><strong class="metric-value" id="uptimeValue">—</strong><span class="metric-note" id="uptimeNote">SESSION</span><span class="metric-track" aria-hidden="true"><i class="metric-fill" id="uptimeFill"></i></span></article></div></section>
-  <section aria-labelledby="liveTitle"><div class="section-head"><h2 id="liveTitle">Signal temps réel</h2><p>36 DERNIERS ÉCHANTILLONS</p></div><div class="block live-panel"><div class="live-summary"><span class="live-title"><strong><i class="live-pulse" id="livePulse" aria-hidden="true"></i>Canal authentifié</strong><span id="profileState">LECTURE DU PROFIL…</span></span><span class="chip on" id="gatewayUptime">UPTIME PI · —</span></div><div class="signal" id="signal" aria-hidden="true"></div><div class="live-stats"><span class="live-stat"><span>TRANSPORT</span><strong id="liveTransport">RECONNEXION</strong></span><span class="live-stat"><span>LATENCE</span><strong id="liveLatency">—</strong></span><span class="live-stat"><span>GIGUE</span><strong id="liveJitter">—</strong></span><span class="live-stat"><span>RÉSEAU CLIENT</span><strong id="liveNetwork">HTTPS</strong></span></div></div></section>
-  <section aria-labelledby="historyTitle"><div class="section-head"><h2 id="historyTitle">Blackbox télémétrique</h2><button class="text-btn" id="resetHistory" type="button">Actualiser</button></div><div class="block history-panel"><div class="history-head"><span class="live-title"><strong id="historyLabel">CPU · 0 POINT</strong><span id="historySource">CACHE LOCAL · 12 MIN</span></span><div><div class="history-tabs" aria-label="Métrique historique"><button class="history-tab" type="button" data-metric="cpu" aria-pressed="true">CPU</button><button class="history-tab" type="button" data-metric="gpu" aria-pressed="false">GPU</button><button class="history-tab" type="button" data-metric="temp" aria-pressed="false">TEMP</button><button class="history-tab" type="button" data-metric="ram" aria-pressed="false">RAM</button><button class="history-tab" type="button" data-metric="latency" aria-pressed="false">SONDE</button></div><div class="range-tabs" aria-label="Période historique"><button class="range-tab" type="button" data-minutes="15" aria-pressed="false">15M</button><button class="range-tab" type="button" data-minutes="60" aria-pressed="true">1H</button><button class="range-tab" type="button" data-minutes="360" aria-pressed="false">6H</button><button class="range-tab" type="button" data-minutes="1440" aria-pressed="false">24H</button><button class="range-tab" type="button" data-minutes="10080" aria-pressed="false">7J</button></div></div></div><div class="history-chart" id="historyChart" role="img" aria-label="Aucune donnée CPU"></div><div class="history-summary"><span class="history-stat"><span>ACTUEL</span><strong id="historyCurrent">—</strong></span><span class="history-stat"><span>MOYENNE</span><strong id="historyAverage">—</strong></span><span class="history-stat"><span>MINIMUM</span><strong id="historyMin">—</strong></span><span class="history-stat"><span>MAXIMUM</span><strong id="historyPeak">—</strong></span></div></div></section>
-  <section aria-labelledby="observatoryTitle"><div class="section-head"><h2 id="observatoryTitle">Observatoire persistant</h2><p id="observatoryRange">1 H · PERSISTANT</p></div><div class="block observatory"><div class="sla-grid"><span class="sla-stat"><span>DISPONIBILITÉ PC</span><strong id="slaAvailability">—</strong></span><span class="sla-stat"><span>DISPONIBILITÉ PONT</span><strong id="slaBridge">—</strong></span><span class="sla-stat"><span>INCIDENTS</span><strong id="slaIncidents">0</strong></span><span class="sla-stat"><span>ÉCHANTILLONS</span><strong id="slaSamples">0</strong></span><span class="sla-stat"><span>PIC THERMIQUE</span><strong id="slaTemperature">—</strong></span><span class="sla-stat"><span>SONDE MOYENNE</span><strong id="slaProbe">—</strong></span></div><div class="insights"><span class="insight"><span>FIABILITÉ</span><strong id="insightAvailability">COLLECTE EN COURS</strong></span><span class="insight"><span>THERMIQUE</span><strong id="insightThermal">ANALYSE EN COURS</strong></span><span class="insight"><span>RÉACTIVITÉ</span><strong id="insightResponse">ANALYSE EN COURS</strong></span></div></div></section>
-  <section aria-labelledby="servicesTitle"><div class="section-head"><h2 id="servicesTitle">Services critiques</h2><p>ACTIONS CONTEXTUELLES</p></div><div class="block services"><div class="service"><i class="state" id="bridgeState"></i><span class="service-copy"><strong id="bridgeLabel">Pont Windows</strong><span id="bridgeNote">Analyse…</span></span><button class="mini" id="bridgeFix" type="button" hidden>Retester</button></div><div class="service"><i class="state" id="parsecState"></i><span class="service-copy"><strong id="parsecLabel">Parsec</strong><span id="parsecNote">Analyse…</span></span><button class="mini remote" id="parsecFix" type="button" data-action="share-parsec" data-online hidden>Préparer</button></div><div class="service"><i class="state" id="codexState"></i><span class="service-copy"><strong id="codexLabel">Codex</strong><span id="codexNote">Analyse…</span></span><button class="mini remote" id="codexFix" type="button" data-action="launch-codex" data-online hidden>Ouvrir</button></div><div class="service"><i class="state" id="fansState"></i><span class="service-copy"><strong id="fansLabel">FanControl</strong><span id="fansNote">Analyse…</span></span><button class="mini remote" id="fansFix" type="button" data-action="repair-fans" data-online hidden>Réparer</button></div></div></section>
-  <section aria-labelledby="routeTitle"><div class="section-head"><h2 id="routeTitle">Route de contrôle</h2><p>CHAÎNE DE CONFIANCE ACTIVE</p></div><div class="block route"><span class="route-node" id="routeClient"><strong>01 · CLIENT</strong><span id="routeClientNote">RÉSEAU</span></span><i class="route-link" id="routeEdge1" aria-hidden="true"></i><span class="route-node" id="routeCloud"><strong>02 · CLOUDFLARE</strong><span id="routeCloudNote">TUNNEL</span></span><i class="route-link" id="routeEdge2" aria-hidden="true"></i><span class="route-node" id="routePi"><strong>03 · RASPBERRY</strong><span id="routePiNote">PASSERELLE</span></span><i class="route-link" id="routeEdge3" aria-hidden="true"></i><span class="route-node" id="routeWindows"><strong>04 · WINDOWS</strong><span id="routeWindowsNote">PONT SSH</span></span></div></section>
-  <section aria-labelledby="automationTitle"><div class="section-head"><h2 id="automationTitle">Missions intelligentes</h2><p>CHAÎNES D’ACTIONS SÉCURISÉES</p></div><div class="automations"><button class="action remote" id="macroFull" type="button"><span class="action-index mono">01 / FULL</span><span><strong>Session complète</strong><span>Réveil, Parsec, FanControl et Codex en une action.</span></span></button><button class="action remote" id="macroParsec" type="button"><span class="action-index mono">02 / REMOTE</span><span><strong>Accès Parsec</strong><span>Réveille la tour et garantit un hôte distant prêt.</span></span></button><button class="action remote" id="macroPerformance" type="button"><span class="action-index mono">03 / BOOST</span><span><strong>Mission performance</strong><span>Mode normal, Parsec, refroidissement et Codex.</span></span></button><button class="action remote" id="macroRecovery" type="button"><span class="action-index mono">04 / RECOVER</span><span><strong>Récupération système</strong><span>Réparation profonde de Parsec et FanControl.</span></span></button><button class="action remote" type="button" data-action="night" data-online><span class="action-index mono">05 / SILENT</span><span><strong>Mode nuit</strong><span>Réduit la présence de la tour sans l’éteindre.</span></span></button></div></section>
-  <section id="queuePanel" aria-labelledby="queueTitle" hidden><div class="section-head"><h2 id="queueTitle">File d’exécution</h2><p>AUTOMATISATION ACTIVE</p></div><div class="queue" id="queue"></div></section>
-  <section aria-labelledby="sessionTitle"><div class="section-head"><h2 id="sessionTitle">Session Blackbox</h2><p>ANALYSE LOCALE SANS SECRET</p></div><div class="block session-panel"><div class="session-stats"><span class="session-stat"><span>DURÉE</span><strong id="sessionTime">0 S</strong></span><span class="session-stat"><span>DISPONIBILITÉ</span><strong id="sessionAvailability">0%</strong></span><span class="session-stat"><span>ÉVÉNEMENTS</span><strong id="sessionEvents">0</strong></span><span class="session-stat"><span>INCIDENTS</span><strong id="sessionIncidents">0</strong></span></div><div class="blackbox-actions"><button id="exportBlackbox" type="button">EXPORTER JSON</button><button id="shareReport" type="button">PARTAGER RAPPORT</button><button id="runScan" type="button">SCAN 10 POINTS</button></div><p class="score-note" id="sessionReconnects">0 RECONNEXION</p></div></section>
-  <section aria-labelledby="timelineTitle"><div class="section-head"><h2 id="timelineTitle">Journal local</h2><button class="text-btn" id="clearLog" type="button" hidden>Effacer</button></div><div class="block"><ol class="timeline" id="timeline"></ol><p class="empty" id="timelineEmpty">Aucune commande exécutée sur cet appareil.</p></div></section>
-  <section aria-labelledby="sharedTitle"><div class="section-head"><h2 id="sharedTitle">Journal partagé</h2><p>TOUS LES APPAREILS · 30 JOURS</p></div><div class="block"><ol class="timeline" id="sharedTimeline"></ol><p class="shared-empty" id="sharedEmpty">Aucune commande persistante enregistrée.</p></div></section>
- </div><aside class="sidecol">
-  <section class="block" aria-labelledby="quickTitle"><div class="panel-title"><strong id="quickTitle">Contrôle direct</strong><span class="chip" id="powerState">PC</span></div><div class="panel-body"><div class="quick-grid"><button class="quick remote" id="wake" type="button">ALLUMER</button><button class="quick remote" type="button" data-action="share-parsec" data-online>PRÉPARER PARSEC</button><button class="quick remote" type="button" data-action="launch-codex" data-online>OUVRIR CODEX</button><button class="quick remote" type="button" data-action="repair-fans" data-online>VENTILATEURS</button><button class="quick remote" type="button" data-action="repair-parsec" data-online>RÉPARER PARSEC</button><a class="quick" href="https://parsec.app/" target="_blank" rel="noopener noreferrer">OUVRIR PARSEC ↗</a></div><div class="mode" aria-label="Profil de la tour"><button class="remote" type="button" data-action="normal" data-mode="normal" aria-pressed="false">NORMAL</button><button class="remote" type="button" data-action="night" data-mode="night" aria-pressed="false">NUIT</button></div></div></section>
-  <section aria-labelledby="recommendTitle"><div class="section-head"><h2 id="recommendTitle">Actions recommandées</h2><p>SELON L’ÉTAT RÉEL</p></div><div class="recommendations" id="recommendations"><p class="all-good">Analyse en cours…</p></div></section>
-  <section class="block" aria-labelledby="gatewayTitle"><div class="panel-title"><strong id="gatewayTitle">Passerelle intelligente</strong><span class="chip" id="gatewayState">RASPBERRY</span></div><div class="panel-body"><div class="chips"><span class="chip" id="watchdogState">WATCHDOG</span><span class="chip on" id="apiState">API VERROUILLÉE</span></div><div class="setting"><span class="setting-copy"><span>FLUX TEMPS RÉEL</span><small>État continu toutes les 4 secondes</small></span><label class="switch"><input id="autoToggle" type="checkbox" aria-label="Activer le flux temps réel"><i></i></label></div><div class="setting"><span class="setting-copy"><span>AUTO-RÉPARATION</span><small>Parsec et FanControl uniquement</small></span><label class="switch"><input id="autofixToggle" type="checkbox" aria-label="Activer l’auto-réparation"><i></i></label></div><div class="setting"><span class="setting-copy"><span>MODE VIGIE</span><small>Maintenir l’écran actif</small></span><label class="switch"><input id="vigilToggle" type="checkbox" aria-label="Activer le mode vigie"><i></i></label></div><div class="setting"><span class="setting-copy"><span>NOTIFICATIONS</span><small>Alertes de changement d’état</small></span><label class="switch"><input id="notifyToggle" type="checkbox" aria-label="Activer les notifications"><i></i></label></div></div></section>
-  <section class="block" aria-labelledby="diagTitle"><div class="panel-title"><strong id="diagTitle">Diagnostic profond</strong><div class="inline-actions"><span class="scan-score" id="diagScore">0/10</span><button class="text-btn" id="copyReport" type="button">Copier</button></div></div><div class="panel-body diagnostics" id="diagnostics"></div></section>
-  <section class="block danger" aria-labelledby="powerTitle"><div class="panel-title"><strong id="powerTitle">Alimentation</strong><span class="mono">S4 / REBOOT</span></div><div class="panel-body"><button class="danger-btn remote" type="button" data-action="reboot" data-confirm="true" data-online>REDÉMARRER WINDOWS</button><button class="danger-btn remote" type="button" data-action="hibernate" data-confirm="true" data-online>ÉTEINDRE · RÉVEIL WOL</button></div></section>
- </aside></div>
- <footer class="footer"><span>GTOL CONTROL CENTER · BUILD 8 · OBSERVATORY</span><button class="text-btn" id="forget" type="button">OUBLIER LA CLÉ</button></footer>
+<div class="busy" id="busy"></div>
+<div class="toast" id="toast"></div>
+
+<main class="gate" id="gate">
+  <div class="box">
+    <div class="logo">GT</div>
+    <h1>PC Control</h1>
+    <p>Pilotage privé de la tour GTOL.</p>
+    <form id="unlock" novalidate>
+      <input id="key" type="password" autocomplete="current-password" spellcheck="false" autocapitalize="off" enterkeyhint="go" placeholder="Clé d'accès">
+      <button class="btn pri" type="submit" style="min-height:52px">Entrer</button>
+      <p class="err" id="gateErr" role="alert"></p>
+    </form>
+  </div>
 </main>
-<dialog id="confirmDialog" aria-labelledby="dialogTitle" aria-describedby="dialogText"><div class="dialog"><p class="eyebrow">CONFIRMATION REQUISE</p><h2 id="dialogTitle">Confirmer l’action</h2><p id="dialogText">Cette action modifie l’état de la tour.</p><div class="dialog-actions"><button class="cancel" id="dialogCancel" type="button">ANNULER</button><button class="confirm" id="dialogConfirm" type="button">CONFIRMER</button></div></div></dialog>
-<dialog class="palette" id="commandPalette" aria-labelledby="commandTitle"><div class="palette-box"><div class="palette-head"><strong id="commandTitle">Palette de commandes</strong><button class="palette-close" id="commandClose" type="button" aria-label="Fermer la palette">×</button></div><label class="label" for="commandSearch">RECHERCHER UNE ACTION</label><input class="command-search" id="commandSearch" type="search" autocomplete="off" placeholder="Parsec, nuit, diagnostic…"><div class="command-list" id="commandList"></div><p class="palette-empty" id="commandEmpty" hidden>Aucune commande trouvée.</p></div></dialog>
+
+<main class="app" id="app" hidden>
+  <header class="top">
+    <div class="brand"><span class="logo">GT</span><span><b id="device">GTOL</b><small>PC Control</small></span></div>
+    <div class="top-right">
+      <span class="stat"><span class="dot" id="hdot"></span><span id="hstate">…</span></span>
+      <button class="iconbtn" id="refreshBtn" aria-label="Actualiser">↻</button>
+    </div>
+  </header>
+
+  <!-- Accueil -->
+  <section class="view" id="view-home">
+    <div class="card"><div class="card-b"><p class="msg"><span class="dot"></span><span id="homeMsg">Lecture…</span></p></div></div>
+    <div class="card"><div class="card-b flush"><div class="grid">
+      <div class="cell" id="m_cpu"><span class="k">CPU</span><span class="val">—</span><span class="bar"><i></i></span></div>
+      <div class="cell" id="m_gpu"><span class="k">GPU</span><span class="val">—</span><span class="bar"><i></i></span></div>
+      <div class="cell" id="m_temp"><span class="k">Temp GPU</span><span class="val">—</span><span class="bar"><i></i></span></div>
+      <div class="cell" id="m_ram"><span class="k">RAM libre</span><span class="val">—</span><span class="bar"><i></i></span></div>
+      <div class="cell" id="m_disk"><span class="k">Disque C</span><span class="val">—</span><span class="bar"><i></i></span></div>
+      <div class="cell" id="m_up"><span class="k">Uptime</span><span class="val">—</span><span class="bar"><i></i></span></div>
+    </div></div></div>
+    <div class="card"><div class="card-h"><h2>Contrôle rapide</h2></div><div class="card-b"><div class="row">
+      <button class="btn pri" id="wakeBtn">Allumer la tour</button>
+      <button class="btn" id="lockBtn" data-need-on hidden>Verrouiller la session</button>
+      <button class="btn" id="shareParsec" data-need-on>Partager Parsec</button>
+      <div class="seg"><button id="modeNormal" data-need-on>Normal</button><button id="modeNight" data-need-on>Nuit</button></div>
+      <div class="row two"><button class="btn sm" id="displaysOff" data-need-on>Écrans off</button><button class="btn sm" id="displaysOn" data-need-on>Écrans on</button></div>
+      <div class="row two"><button class="btn sm" id="repairFans" data-need-on>Ventilateurs</button><button class="btn sm" id="launchCodex" data-need-on>Lancer Codex</button></div>
+    </div></div></div>
+    <div class="card"><div class="card-h"><h2>Alimentation</h2><span class="sub">Confirmation requise</span></div><div class="card-b"><div class="row two">
+      <button class="btn" id="rebootBtn" data-need-on>Redémarrer</button>
+      <button class="btn bad" id="hibernateBtn" data-need-on>Éteindre</button>
+    </div></div></div>
+    <div class="card"><div class="card-b"><button class="btn sm" onclick="localStorage.removeItem('pcControlKey');location.reload()" style="border:0;color:var(--faint)">Oublier la clé</button></div></div>
+  </section>
+
+  <!-- Écran -->
+  <section class="view" id="view-screen" hidden>
+    <div class="card"><div class="card-b flush">
+      <div class="screen-wrap" id="screenWrap"><img id="screenImg" hidden alt="Écran de la tour"><div class="ph" id="screenPh">Capture…</div><div class="screen-hint">Tape pour cliquer · appui long = clic droit</div></div>
+    </div></div>
+    <div class="row three"><div class="seg" style="grid-template-columns:1fr 1fr 1fr"><button data-click="left" class="active">Gauche</button><button data-click="right">Droit</button><button data-click="double">Double</button></div></div>
+    <div class="row two"><button class="btn sm" id="shotBtn">Rafraîchir</button><button class="btn sm" id="autoScreen">Auto ○</button></div>
+    <div class="card"><div class="card-h"><h2>Clavier</h2><span class="sub" id="monitorSel" style="display:flex;gap:4px" hidden></span></div><div class="card-b">
+      <div class="keybar"><input id="keyText" placeholder="Texte à saisir…" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="send"><button class="btn sm" id="keySend" style="width:auto">Envoyer</button></div>
+      <div class="keys" style="margin-top:10px">
+        <button data-key="enter">⏎</button><button data-key="backspace">⌫</button><button data-key="tab">⇥</button><button data-key="escape">esc</button><button data-key="up">↑</button><button data-key="down">↓</button>
+        <button data-key="left">←</button><button data-key="right">→</button><button data-key="c" data-mods="ctrl">^C</button><button data-key="v" data-mods="ctrl">^V</button><button data-key="win">⊞</button><button data-key="delete">del</button>
+      </div>
+    </div></div>
+    <div class="card"><div class="card-h"><h2>Défilement & son</h2></div><div class="card-b">
+      <div class="row two" style="margin-bottom:12px"><button class="btn sm" data-scroll="600">▲ Haut</button><button class="btn sm" data-scroll="-600">▼ Bas</button></div>
+      <div class="vol"><span class="sub">VOL</span><input type="range" id="volRange" min="0" max="100" value="50"><span class="val" id="volVal">—</span></div>
+      <div class="row three" style="margin-top:12px"><button class="btn sm" data-media="prev">⏮</button><button class="btn sm" data-media="playpause">⏯</button><button class="btn sm" data-media="next">⏭</button></div>
+    </div></div>
+  </section>
+
+  <!-- Fichiers -->
+  <section class="view" id="view-files" hidden>
+    <div class="card"><div class="crumb" id="crumb"><b>Disques</b></div>
+      <div class="card-b" id="fileActions" hidden style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn sm" id="fileUp" style="width:auto">↑ Parent</button>
+        <button class="btn sm" id="fileRefresh" style="width:auto">↻</button>
+        <button class="btn sm" id="newFolder" style="width:auto">+ Dossier</button>
+        <label class="btn sm" style="width:auto;cursor:pointer">↥ Envoyer<input type="file" id="uploadInput" hidden></label>
+      </div>
+      <div class="list" id="fileList"></div>
+    </div>
+  </section>
+
+  <!-- Système -->
+  <section class="view" id="view-system" hidden>
+    <div class="card"><div class="card-h"><h2>Applications</h2></div><div class="card-b"><div class="apps" id="appList"></div></div></div>
+    <div class="card"><div class="card-h"><h2>Disques</h2></div><div class="card-b" id="driveList"></div></div>
+    <div class="card"><div class="card-h"><h2>Processus</h2><button class="btn sm" id="sysRefresh" style="width:auto">↻</button></div><div class="card-b flush" id="procList"></div></div>
+  </section>
+
+  <!-- Terminal -->
+  <section class="view" id="view-terminal" hidden>
+    <div class="card"><div class="card-h"><h2>Terminal</h2><div class="seg" style="grid-template-columns:1fr 1fr;width:150px"><button data-shell="powershell" class="active">PS</button><button data-shell="cmd">CMD</button></div></div>
+      <div class="card-b">
+        <pre class="term" id="termOut"></pre>
+        <form id="termForm" class="term-in"><input id="termIn" placeholder="Commande…" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="go"><button class="btn pri" type="submit" style="width:auto">Run</button></form>
+        <button class="btn sm" id="termClear" style="margin-top:8px">Effacer</button>
+      </div>
+    </div>
+  </section>
+
+  <nav class="nav">
+    <button data-tab="home" class="active"><span class="ni">▦</span>Accueil</button>
+    <button data-tab="screen"><span class="ni">▣</span>Écran</button>
+    <button data-tab="files"><span class="ni">🗂</span>Fichiers</button>
+    <button data-tab="system"><span class="ni">⚙</span>Système</button>
+    <button data-tab="terminal"><span class="ni">›_</span>Terminal</button>
+  </nav>
+</main>
+
+<dialog id="dlg"><div class="dlg" id="dlgBody"></div></dialog>
 """
 
 PAGE = """<!doctype html><html lang="fr"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="theme-color" content="#050505"><meta name="color-scheme" content="dark">
-<meta name="description" content="Control Center privé de la tour GTOL"><meta name="mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="GTOL Control"><link rel="manifest" href="/manifest.webmanifest?v=8">
-<link rel="icon" type="image/svg+xml" href="/icon.svg?v=8"><link rel="apple-touch-icon" href="/icon-192.png?v=8">
-<title>GTOL Control Center</title><style>__STYLE__</style></head><body><noscript><main class="shell"><h1>JavaScript requis</h1><p>Active JavaScript pour piloter GTOL.</p></main></noscript>__BODY__<script>__SCRIPT__</script></body></html>""".replace("__STYLE__",STYLE).replace("__BODY__",BODY).replace("__SCRIPT__",SCRIPT)
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1">
+<meta name="theme-color" content="#0a0a0b"><meta name="color-scheme" content="dark">
+<meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="PC Control">
+<link rel="manifest" href="/manifest.webmanifest?v=9"><link rel="icon" type="image/svg+xml" href="/icon.svg?v=9"><link rel="apple-touch-icon" href="/icon-192.png?v=9">
+<title>PC Control</title><style>__STYLE__</style></head><body>
+<noscript><main style="padding:24px"><h1>PC Control</h1><p>JavaScript requis.</p></main></noscript>
+__BODY__<script>__SCRIPT__</script></body></html>""".replace("__STYLE__", STYLE).replace("__BODY__", BODY).replace("__SCRIPT__", SCRIPT)
 
-MANIFEST={
- "name":"GTOL Control Center","short_name":"GTOL Control","description":"Control Center privé de la tour GTOL",
- "id":"/","start_url":"/?app=8","scope":"/","display":"standalone","display_override":["standalone","minimal-ui"],
- "orientation":"any","background_color":"#050505","theme_color":"#050505","categories":["utilities","productivity"],
- "icons":[{"src":"/icon-192.png?v=8","sizes":"192x192","type":"image/png","purpose":"any"},{"src":"/icon-512.png?v=8","sizes":"512x512","type":"image/png","purpose":"any maskable"}],
- "shortcuts":[{"name":"Préparer la session","short_name":"Préparer","url":"/?do=prepare&v=8"},{"name":"Allumer GTOL","short_name":"Allumer","url":"/?do=wake&v=8"},{"name":"Ouvrir Codex","short_name":"Codex","url":"/?do=launch-codex&v=8"}]
+MANIFEST = {
+    "name": "GTOL PC Control",
+    "short_name": "PC Control",
+    "description": "Pilotage complet et privé de la tour GTOL",
+    "id": "/",
+    "start_url": "/?app=9",
+    "scope": "/",
+    "display": "standalone",
+    "display_override": ["standalone", "minimal-ui"],
+    "orientation": "portrait",
+    "background_color": "#0a0a0b",
+    "theme_color": "#0a0a0b",
+    "categories": ["utilities", "productivity"],
+    "icons": [
+        {"src": "/icon-192.png?v=9", "sizes": "192x192", "type": "image/png", "purpose": "any"},
+        {"src": "/icon-512.png?v=9", "sizes": "512x512", "type": "image/png", "purpose": "any"},
+        {"src": "/icon-512.png?v=9", "sizes": "512x512", "type": "image/png", "purpose": "maskable"},
+    ],
+    "shortcuts": [
+        {"name": "Écran", "short_name": "Écran", "url": "/?app=9#screen"},
+        {"name": "Terminal", "short_name": "Terminal", "url": "/?app=9#terminal"},
+    ],
 }
 
-SERVICE_WORKER=r"""const CACHE="gtol-control-v8",OFFLINE="/?offline=8",ASSETS=["/manifest.webmanifest?v=8","/icon.svg?v=8","/icon-192.png?v=8","/icon-512.png?v=8"];
-self.addEventListener("install",e=>{self.skipWaiting();e.waitUntil(caches.open(CACHE).then(c=>Promise.all(ASSETS.map(a=>c.add(a).catch(()=>{})))))});
-self.addEventListener("activate",e=>e.waitUntil(caches.keys().then(keys=>Promise.all(keys.map(k=>k===CACHE?null:caches.delete(k)))).then(()=>self.clients.claim())));
-self.addEventListener("fetch",e=>{const r=e.request,u=new URL(r.url);if(r.method!=="GET"||u.pathname.startsWith("/api/"))return;if(r.mode==="navigate"){e.respondWith(fetch(r,{cache:"no-store"}).catch(()=>caches.match(OFFLINE).then(x=>x||new Response("GTOL Control Center hors connexion",{status:503,headers:{"Content-Type":"text/plain;charset=utf-8"}}))));return}e.respondWith(fetch(r,{cache:"no-store"}).catch(()=>caches.match(r)))});
+SERVICE_WORKER = r"""const CACHE="pc-control-v9",OFFLINE="/?offline=9";
+self.addEventListener("install",e=>{self.skipWaiting()});
+self.addEventListener("activate",e=>e.waitUntil(caches.keys().then(k=>Promise.all(k.map(x=>caches.delete(x)))).then(()=>self.clients.claim())));
+self.addEventListener("fetch",e=>{const r=e.request,u=new URL(r.url);if(r.method!=="GET"||u.pathname.startsWith("/api/"))return;
+ e.respondWith(fetch(r,{cache:"no-store"}).catch(()=>caches.match(r).then(x=>x||new Response("Hors connexion",{status:503,headers:{"Content-Type":"text/plain;charset=utf-8"}}))))});
 """

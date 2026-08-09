@@ -50,7 +50,11 @@ ASSETLINKS_FILE = os.environ.get(
 
 RATE_WINDOW_SECONDS = 60
 RATE_MAX_REQUESTS = 30
+# Le pilotage direct (souris, écran, clavier) génère beaucoup plus de requêtes
+# légitimes qu'une simple lecture d'état : on lui accorde un quota bien plus large.
+RATE_MAX_CONTROL = 600
 ATTEMPTS = defaultdict(deque)
+CONTROL_ATTEMPTS = defaultdict(deque)
 STATUS_CONDITION = threading.Condition()
 LATEST_STATUS = None
 LATEST_STATUS_VERSION = 0
@@ -68,6 +72,28 @@ CONTROL_ACTIONS = {
     "night": "Night",
     "hibernate": "Hibernate",
     "reboot": "Reboot",
+}
+
+# Actions riches relayées telles quelles au pont Windows via le canal `Invoke`.
+# Le pont applique la liste blanche réelle ; on la reproduit ici en garde-fou pour
+# rejeter au plus tôt tout nom d'action non prévu.
+RICH_ACTIONS = {
+    # Bureau interactif (agent de session).
+    "Screenshot", "ScreenInfo", "Click", "MoveMouse", "Scroll", "TypeText", "SendKey",
+    "Volume", "Media", "Lock", "DisplaysOff", "DisplaysOn", "GetClipboard", "SetClipboard",
+    "WindowList", "FocusWindow", "CloseWindow", "Launch", "OpenPath", "OpenUrl", "Notify",
+    "SessionInfo", "LogOff",
+    # Système (pont SSH).
+    "FsList", "FsRead", "FsWrite", "FsDelete", "FsMkdir", "FsRename", "FsDownload",
+    "Drives", "Processes", "KillProcess", "Exec", "BridgeStatus",
+}
+
+# Actions longues : capture, terminal, transferts de fichiers. Délai réseau plus large.
+RICH_TIMEOUTS = {
+    "Screenshot": 45,
+    "Exec": 130,
+    "FsDownload": 60,
+    "FsWrite": 60,
 }
 
 
@@ -650,6 +676,17 @@ def rate_limited(address):
     return False
 
 
+def rate_limited_control(address):
+    now = time.monotonic()
+    entries = CONTROL_ATTEMPTS[address]
+    while entries and now - entries[0] > RATE_WINDOW_SECONDS:
+        entries.popleft()
+    if len(entries) >= RATE_MAX_CONTROL:
+        return True
+    entries.append(now)
+    return False
+
+
 def resolve_pc_ip():
     try:
         return socket.gethostbyname(PC_HOST)
@@ -725,23 +762,47 @@ def decode_windows(raw):
     return raw.decode("utf-8", "replace")
 
 
-def pc_control(action):
-    """Exécute une action du pont Windows par SSH. `action` vient de CONTROL_ACTIONS."""
-    command = [
+def ssh_base(connect_timeout=6):
+    """Options SSH communes au pont Windows.
+
+    On n'utilise PAS le multiplexage ControlMaster : le pont lit son payload sur
+    l'entrée standard, or un canal SSH multiplexé ne transmet pas proprement le
+    stdin d'une commande forcée (il renvoie la sortie de la commande maîtresse).
+    Une poignée de main complète par action reste rapide sur le réseau local.
+    """
+    return [
         "/usr/bin/ssh",
         "-i",
         SSH_KEY,
         "-o",
         "BatchMode=yes",
         "-o",
-        "ConnectTimeout=6",
+        f"ConnectTimeout={connect_timeout}",
         "-o",
         "StrictHostKeyChecking=accept-new",
         "-o",
         f"UserKnownHostsFile={SSH_KNOWN_HOSTS}",
-        f"{PC_USER}@{PC_HOST}",
-        action,
     ]
+
+
+def last_json(output):
+    """Les scripts Windows peuvent journaliser : on garde le dernier objet JSON."""
+    for line in reversed(output.splitlines()):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            parsed = json.loads(line)
+            if isinstance(parsed, dict):
+                return parsed
+        except json.JSONDecodeError:
+            continue
+    return None
+
+
+def pc_control(action):
+    """Exécute un verbe historique du pont Windows par SSH."""
+    command = ssh_base() + [f"{PC_USER}@{PC_HOST}", action]
     try:
         result = subprocess.run(command, capture_output=True, timeout=90, check=False)
     except subprocess.TimeoutExpired as error:
@@ -749,15 +810,7 @@ def pc_control(action):
 
     output = decode_windows(result.stdout).strip()
     errors = decode_windows(result.stderr).strip()
-
-    # Les scripts Windows peuvent écrire des lignes de journal : on garde le dernier JSON.
-    parsed = None
-    for line in reversed(output.splitlines()):
-        try:
-            parsed = json.loads(line)
-            break
-        except json.JSONDecodeError:
-            continue
+    parsed = last_json(output)
 
     if result.returncode != 0:
         detail = ""
@@ -768,6 +821,38 @@ def pc_control(action):
         raise RuntimeError(detail or "Le pont Windows n'est pas joignable.")
     if not isinstance(parsed, dict):
         return {"ok": True, "message": output or "Action terminée."}
+    return parsed
+
+
+def pc_invoke(action, args=None, timeout=60):
+    """Envoie une action riche { action, args } au pont via le canal `Invoke`.
+
+    Le payload JSON transite par l'entrée standard SSH (aucune limite de longueur,
+    contrairement à la ligne de commande). La liste blanche réelle est appliquée
+    côté Windows par pccontrol-bridge.ps1.
+    """
+    payload = json.dumps({"action": action, "args": args or {}}, ensure_ascii=False)
+    command = ssh_base() + [f"{PC_USER}@{PC_HOST}", "Invoke"]
+    try:
+        result = subprocess.run(
+            command,
+            input=payload.encode("utf-8"),
+            capture_output=True,
+            timeout=timeout,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as error:
+        raise RuntimeError("La tour ne répond pas à temps.") from error
+
+    output = decode_windows(result.stdout).strip()
+    errors = decode_windows(result.stderr).strip()
+    parsed = last_json(output)
+
+    if result.returncode != 0 and not isinstance(parsed, dict):
+        detail = errors.splitlines()[-1] if errors else ""
+        raise RuntimeError(detail or "Le pont Windows n'est pas joignable.")
+    if not isinstance(parsed, dict):
+        raise RuntimeError("Réponse illisible du pont Windows.")
     return parsed
 
 
@@ -1074,8 +1159,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header(
             "Content-Security-Policy",
             "default-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; "
-            "connect-src 'self'; img-src 'self'; frame-ancestors 'none'; base-uri 'none'; "
-            "form-action 'self'",
+            "connect-src 'self'; img-src 'self' data: blob:; frame-ancestors 'none'; "
+            "base-uri 'none'; form-action 'self'",
         )
         self.end_headers()
         self.wfile.write(body)
@@ -1227,11 +1312,76 @@ class Handler(BaseHTTPRequestHandler):
 
         self.send_json(404, {"error": "Introuvable"})
 
+    def read_json_large(self, limit=1_500_000):
+        """Corps JSON pouvant contenir un fichier encodé (upload)."""
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            raise ValueError("Requête invalide")
+        if length < 2 or length > limit:
+            raise ValueError("Requête invalide")
+        return json.loads(self.rfile.read(length))
+
+    def handle_action(self):
+        """Canal de pilotage riche : /api/action { action, args }."""
+        if rate_limited_control(self.client_address[0]):
+            self.send_json(429, {"error": "Trop de requêtes, ralentis un peu."})
+            return
+        if not authorized(self.headers.get("Authorization")):
+            self.send_json(401, {"error": "Clé incorrecte"})
+            return
+        try:
+            payload = self.read_json_large()
+        except (ValueError, json.JSONDecodeError):
+            self.send_json(400, {"error": "Requête invalide"})
+            return
+
+        action = payload.get("action") if isinstance(payload, dict) else None
+        if action not in RICH_ACTIONS:
+            self.send_json(400, {"error": "Action non autorisée"})
+            return
+        args = payload.get("args") if isinstance(payload.get("args"), dict) else {}
+
+        # Ces actions ont besoin que la tour soit joignable ; on évite un aller-retour
+        # SSH voué à expirer si elle est éteinte.
+        if not is_online():
+            self.send_json(409, {"online": False, "error": "La tour est éteinte, allume-la d'abord."})
+            return
+
+        started = time.monotonic()
+        timeout = RICH_TIMEOUTS.get(action, 30)
+        try:
+            result = pc_invoke(action, args, timeout=timeout)
+        except RuntimeError as error:
+            self.send_json(503, {"online": True, "ok": False, "error": str(error)})
+            return
+
+        # Les actions qui modifient l'état de la tour sont tracées dans l'audit partagé ;
+        # les lectures pures (capture, listing, statut) ne polluent pas le journal.
+        if action not in (
+            "Screenshot", "ScreenInfo", "SessionInfo", "BridgeStatus", "WindowList",
+            "FsList", "FsRead", "FsDownload", "Drives", "Processes", "GetClipboard",
+            "MoveMouse",
+        ):
+            record_audit(
+                action,
+                result.get("ok", True),
+                result.get("message") or result.get("error") or "Terminé",
+                (time.monotonic() - started) * 1000,
+            )
+
+        self.send_json(200 if result.get("ok", True) else 500, {"online": True, **result})
+
     def do_POST(self):
         path = self.path.split("?", 1)[0]
-        if path not in ("/api/wake", "/api/control"):
+        if path not in ("/api/wake", "/api/control", "/api/action"):
             self.send_json(404, {"error": "Introuvable"})
             return
+
+        if path == "/api/action":
+            self.handle_action()
+            return
+
         if not self.guard_api():
             return
 
