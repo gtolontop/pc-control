@@ -12,4 +12,4 @@ Les changements notables de PC Control seront documentés dans ce fichier.
 - services systemd et watchdog Wake-on-LAN ;
 - exemples de configuration sans secrets ;
 - documentation d'architecture et règles de sécurité ;
-- validation statique Python et PowerShell.
+- validation locale statique Python, PowerShell et anti-secrets.

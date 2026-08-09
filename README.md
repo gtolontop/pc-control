@@ -50,3 +50,10 @@ et remplacer uniquement les valeurs factices.
 Le prochain chantier conseillé est de séparer l'interface HTML embarquée dans
 `portal_ui.py`, d'ajouter des tests de l'API, puis de construire le client desktop.
 
+## Validation sûre
+
+La validation locale analyse les fichiers sans démarrer le serveur et sans appeler la tour :
+
+```powershell
+pwsh -NoProfile -File .\scripts\validate.ps1
+```
