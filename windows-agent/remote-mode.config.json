@@ -1,0 +1,19 @@
+{
+  "EnableParsecPrivacyMode": true,
+  "EnableFallbackVirtualDisplay": true,
+  "VirtualDisplayCount": 1,
+  "AggressiveDisablePhysicalMonitors": false,
+  "DisablePhysicalMonitorsDuringParsec": false,
+  "UseDdcMonitorPowerOff": true,
+  "UseWindowsDisplayPowerOffFallback": false,
+  "WatchdogIntervalSeconds": 3,
+  "ParsecStreamFpsTimeoutSeconds": 30,
+  "LockWorkstationOnNightMode": false,
+  "PreferredVirtualAudioPattern": "CABLE|VB-Audio|Voicemeeter|Steam Streaming Speakers",
+  "PreferredLocalAudioId": "{0.0.0.00000000}.{f227e489-028f-4428-8817-21757fa027d4}",
+  "PreferredLocalAudioPattern": "Realtek|Haut-parleurs",
+  "RemovePinnedPhysicalParsecOutputs": true,
+  "KeepHostMutedWithoutVirtualAudio": true,
+  "KeepHostMutedWithVirtualAudio": false,
+  "ResetPerAppAudioRoutingInNightMode": false
+}

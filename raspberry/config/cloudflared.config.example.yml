@@ -1,0 +1,10 @@
+tunnel: yourscript
+credentials-file: /etc/cloudflared/TUNNEL_ID.json
+
+ingress:
+  - hostname: ssh-raspberry.your-script.com
+    service: ssh://localhost:22
+  - hostname: wake.your-script.com
+    service: http://127.0.0.1:8789
+  - service: http_status:404
+

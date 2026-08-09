@@ -1,0 +1,212 @@
+=============================================
+   PCMode - TUTO INSTALL (15 min, une fois)
+=============================================
+
+Objectif: avoir 2 modes au clavier Corsair (G1 = sleep silencieux, G6 = perf).
+
+
+-----------------------------------------------
+ETAPE 1 - Enregistrer les taches planifiees
+-----------------------------------------------
+
+But: permettre a iCUE de declencher les scripts SANS popup UAC chaque fois.
+
+1.1) Touche Windows -> tape "powershell"
+1.2) Click DROIT sur "Windows PowerShell" -> "Executer en tant qu'administrateur"
+1.3) Click "Oui" sur le popup UAC
+1.4) Dans la fenetre PowerShell bleue, tape:
+
+        C:\PCMode\install-tasks.ps1
+
+     Appuie Entree.
+
+1.5) Tu dois voir:
+        Tache enregistree: PCMode_Sleep
+        Tache enregistree: PCMode_Perf
+
+   Si erreur "execution policy" -> tape d'abord:
+        Set-ExecutionPolicy -Scope CurrentUser RemoteSigned -Force
+   puis re-essaie.
+
+1.6) Verif: tape
+        schtasks /query /tn PCMode_Sleep
+        schtasks /query /tn PCMode_Perf
+   Les deux doivent exister (status: Ready).
+
+
+-----------------------------------------------
+ETAPE 2 - Configurer FanControl (LE PLUS IMPORTANT)
+-----------------------------------------------
+
+But: avoir une config "Silent" qui STOP les ventilos en idle.
+
+2.1) Ferme FanControl s'il tourne (icone systray -> Quit)
+2.2) Touche Windows -> tape "FanControl"
+2.3) Click DROIT -> "Executer en tant qu'administrateur"
+
+2.4) D'abord verifie/cree ta config NORMALE (Default):
+     - File -> Save Configuration As...
+     - Nom: Default.json
+     - Click Save
+
+2.5) Maintenant cree la config SILENT:
+     File -> New Configuration (ou copie Default.json)
+
+     Pour CHAQUE ventilo BOITIER (tous sauf CPU et pump):
+       a) Trouve sa courbe (ou cree-en une: Add -> Graph)
+       b) Right-click sur la courbe -> "Start/Stop" -> COCHE la case
+       c) Threshold: 60 C (les ventilos restent a 0 RPM tant que < 60 C)
+       d) Hysteresis: 5 C (evite les on/off rapides)
+       e) Courbe: 0% jusqu'a 60 C, puis monte doucement (20% a 65, 40% a 70, etc.)
+
+     Pour le CPU FAN:
+       - Meme principe: Start/Stop coche, threshold 65 C
+       - Avec le 7700 bride a 30% + boost off, le CPU restera 40-45 C en idle
+       - Donc le CPU fan sera A L'ARRET en sleep mode
+
+     Si t'as une AIO (pompe):
+       - Pas de Start/Stop sur la pompe
+       - Mets-la a 40% fixe (silencieux mais elle circule)
+
+2.6) File -> Save Configuration As...
+     Nom: Silent.json
+     Click Save
+
+2.7) Verif: les 2 fichiers doivent exister dans:
+        %LOCALAPPDATA%\FanControl\Configurations\
+     (copie ce chemin dans la barre de l'Explorateur Windows)
+
+     Tu dois voir:
+        Default.json
+        Silent.json
+
+2.8) Recharge ta config Default pour repartir normal:
+     File -> Load Configuration -> Default.json
+
+
+-----------------------------------------------
+ETAPE 3 - Configurer les macros iCUE G1 et G6
+-----------------------------------------------
+
+3.1) Ouvre iCUE (icone systray)
+3.2) Click sur ton clavier dans la liste des devices
+3.3) Onglet "ACTIONS" (ou "Macros" selon version)
+3.4) Click "+" pour creer une nouvelle action
+
+   POUR G1 (sleep):
+     - Nom: "Sleep PC"
+     - Type d'action: "Lancer Application" / "Launch Application"
+     - Programme: C:\Windows\System32\schtasks.exe
+     - Arguments: /run /tn PCMode_Sleep
+     - (Coche "Run minimized" si dispo)
+     - Save
+
+3.5) Re-click "+" pour la 2eme:
+
+   POUR G6 (perf):
+     - Nom: "Perf PC"
+     - Type d'action: "Lancer Application"
+     - Programme: C:\Windows\System32\schtasks.exe
+     - Arguments: /run /tn PCMode_Perf
+     - Save
+
+3.6) Maintenant assigne les actions aux touches:
+     - Onglet "KEY ASSIGNMENTS" (ou clique direct sur la touche dans la photo du clavier)
+     - Click sur la touche G1 -> assigne "Sleep PC"
+     - Click sur la touche G6 -> assigne "Perf PC"
+
+3.7) (RECOMMANDE) Pour eteindre AUSSI le RGB du clavier en sleep:
+     Cree un profil iCUE "RGB OFF" (toutes les LEDs noires/black)
+     Et un profil "RGB ON" (ton normal)
+
+     Dans la macro "Sleep PC", AJOUTE une etape AVANT le launch:
+       Action -> "Switch to Profile" -> "RGB OFF"
+     Dans la macro "Perf PC", ajoute:
+       Action -> "Switch to Profile" -> "RGB ON"
+
+3.8) Save tout. Ferme iCUE et reouvre-le pour etre sur que ca prenne.
+
+
+-----------------------------------------------
+ETAPE 4 - PREMIER TEST (en journee, pas en pleine nuit)
+-----------------------------------------------
+
+4.1) Ouvre HWInfo64 ou MSI Afterburner pour voir les temps + RPM ventilos
+4.2) Verifie que MC server tourne (regarde les process java)
+4.3) Appuie G1
+     => Ecrans s'eteignent (normal)
+     => Bouge la souris pour les rallumer
+
+4.4) Apres 1-2 min, verifie:
+     - CPU temp: 40-50 C
+     - Ventilos boitier: 0 RPM (ou tres bas)
+     - GPU temp: 35-40 C, GPU fans 0 RPM
+     - Audio mute (icone speaker barre)
+     - Connecte-toi au MC server depuis un autre PC -> doit marcher
+
+4.5) Appuie G6
+     => Tout reviens normal en quelques secondes
+     => Audio unmute
+     => Notifs reactivees
+     => Ventilos repassent en mode normal
+
+4.6) Si un truc cloche, regarde les logs:
+        notepad C:\PCMode\last-sleep.log
+        notepad C:\PCMode\last-perf.log
+
+
+-----------------------------------------------
+ETAPE 5 - PREMIERE NUIT
+-----------------------------------------------
+
+5.1) Le soir, appuie G1
+5.2) Mets ton oreille pres du PC -> tu dois entendre QUASI rien
+5.3) Si tu entends encore -> regarde "TROUBLESHOOTING" ci-dessous
+5.4) Le matin, appuie G6 et reprends une vie normale
+
+
+-----------------------------------------------
+TROUBLESHOOTING
+-----------------------------------------------
+
+"J'entends toujours un ventilo en sleep mode":
+  -> Ouvre FanControl, regarde quel ventilo tourne encore
+  -> Probleme classique: certains ventilos PWM ne s'arretent pas a 0% (ils ont
+     un RPM minimum). Solution: coche "Start/Stop" + threshold plus haut (70 C)
+  -> Ou: dans le BIOS, mets le mode du header en "DC" au lieu de "PWM" (les fans
+     DC peuvent etre coupes electriquement)
+
+"Le RGB clavier reste allume":
+  -> Tu n'as pas configure le switch de profil iCUE dans la macro (etape 3.7)
+  -> Ou: tu as un profil "hardware lighting" sauvegarde dans la memoire du clavier
+
+"Les services restartent pas en perf":
+  -> Verifie que install-tasks.ps1 a bien ete lance en ADMIN
+  -> Sinon les Stop/Start-Service echouent silencieusement
+
+"MC lag en sleep mode":
+  -> Trop bride. Ouvre sleep.ps1, monte PROCTHROTTLEMAX a 50 au lieu de 30
+
+"GPU consomme encore beaucoup en idle":
+  -> nvidia-smi -q -d POWER montre la conso reelle
+  -> Le 4080 Super descend a 8-15W en idle, c'est normal
+  -> Si > 30W: probleme driver, redemarre
+
+"Notifs Discord/Steam quand meme":
+  -> Le registry NOC_GLOBAL_SETTING_TOASTS_ENABLED desactive les TOAST Windows
+     mais pas les sons internes des apps. Solution: mute audio (deja fait).
+  -> Pour bloquer aussi: ferme Discord/Steam au coucher (manuellement ou via macro)
+
+
+-----------------------------------------------
+QUICK REF
+-----------------------------------------------
+
+Test manuel sleep:   schtasks /run /tn PCMode_Sleep
+Test manuel perf:    schtasks /run /tn PCMode_Perf
+Logs:                C:\PCMode\last-sleep.log / last-perf.log
+Detail effets:       C:\PCMode\README.txt
+Desinstall:          schtasks /delete /tn PCMode_Sleep /f
+                     schtasks /delete /tn PCMode_Perf /f
+
+Bonne nuit !

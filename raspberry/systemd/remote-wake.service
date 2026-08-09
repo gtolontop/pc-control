@@ -1,0 +1,33 @@
+[Unit]
+Description=Remote Wake-on-LAN gateway
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=remote-wake
+Group=remote-wake
+EnvironmentFile=/etc/remote-wake.env
+ExecStartPre=+/usr/sbin/ip neigh replace ${REMOTE_WAKE_IP} lladdr ${REMOTE_WAKE_MAC} nud permanent dev ${REMOTE_WAKE_INTERFACE}
+ExecStart=/usr/bin/python3 /opt/remote-wake/server.py
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+StateDirectory=remote-wake
+StateDirectoryMode=0700
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+AmbientCapabilities=CAP_NET_RAW
+CapabilityBoundingSet=CAP_NET_RAW
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

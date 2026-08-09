@@ -1,0 +1,951 @@
+#!/usr/bin/env python3
+"""GTOL PC Control — portail PWA de télécommande de la tour Windows.
+
+Le service écoute en local sur le Raspberry Pi ; Cloudflare Tunnel l'expose sur
+https://wake.your-script.com. Aucune route ne permet d'exécuter une commande
+arbitraire : /api/control n'accepte que les actions listées dans CONTROL_ACTIONS,
+et le pont Windows revérifie cette liste de son côté.
+"""
+
+import hmac
+import json
+import os
+import re
+import socket
+import struct
+import subprocess
+import time
+import zlib
+from collections import defaultdict, deque
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+
+# --------------------------------------------------------------------------- #
+# Configuration
+# --------------------------------------------------------------------------- #
+
+HOST = "127.0.0.1"
+PORT = int(os.environ.get("REMOTE_WAKE_PORT", "8789"))
+TOKEN = os.environ["REMOTE_WAKE_TOKEN"]
+PC_MAC = os.environ["REMOTE_WAKE_MAC"]
+PC_IP = os.environ.get("REMOTE_WAKE_IP", "192.168.1.100")
+PC_HOST = os.environ.get("REMOTE_WAKE_HOST", "gtol.local")
+PC_USER = os.environ.get("REMOTE_WAKE_USER", "teamr")
+BROADCAST = os.environ.get("REMOTE_WAKE_BROADCAST", "192.168.1.255")
+INTERFACE = os.environ.get("REMOTE_WAKE_INTERFACE", "wlan0")
+SSH_KEY = os.environ.get("REMOTE_WAKE_SSH_KEY", "/etc/remote-wake/id_ed25519")
+SSH_KNOWN_HOSTS = "/var/lib/remote-wake/known_hosts"
+MANUAL_OFF_FILE = "/var/lib/remote-wake/manual-off"
+
+# Permet plus tard de publier un vrai APK (Trusted Web Activity) sans toucher au code :
+# il suffit de déposer le fichier de vérification Android à cet emplacement.
+ASSETLINKS_FILE = os.environ.get(
+    "REMOTE_WAKE_ASSETLINKS", "/etc/remote-wake/assetlinks.json"
+)
+
+RATE_WINDOW_SECONDS = 60
+RATE_MAX_REQUESTS = 30
+ATTEMPTS = defaultdict(deque)
+
+# Nom public envoyé par le portail -> action acceptée par le pont Windows.
+CONTROL_ACTIONS = {
+    "status": "Status",
+    "share-parsec": "ShareParsec",
+    "repair-parsec": "RepairParsec",
+    "launch-codex": "LaunchCodex",
+    "repair-fans": "RepairFans",
+    "normal": "Normal",
+    "night": "Night",
+    "hibernate": "Hibernate",
+    "reboot": "Reboot",
+}
+
+
+# --------------------------------------------------------------------------- #
+# Interface : une seule page, monochrome, installable
+# --------------------------------------------------------------------------- #
+
+STYLE = """
+*, *::before, *::after { box-sizing: border-box }
+
+:root {
+  --bg: #000;
+  --fg: #fff;
+  --dim: #7c7c7c;
+  --line: #1e1e1e;
+  --edge: #333;
+  --press: #cdcdcd;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, system-ui, sans-serif;
+  -webkit-tap-highlight-color: transparent;
+}
+
+html { background: var(--bg) }
+
+body {
+  margin: 0;
+  min-height: 100dvh;
+  padding: max(22px, env(safe-area-inset-top)) 16px calc(24px + env(safe-area-inset-bottom));
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 15px;
+  line-height: 1.4;
+  -webkit-font-smoothing: antialiased;
+}
+
+main { width: 100%; max-width: 430px; margin: 0 auto }
+[hidden] { display: none !important }
+
+h1 { margin: 0; font-size: 15px; font-weight: 600; letter-spacing: .16em; text-transform: uppercase }
+
+.head {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 12px;
+  padding-bottom: 13px; border-bottom: 1px solid var(--line);
+}
+.head span { font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: var(--dim) }
+
+/* Ligne d'état permanente : premier repère de lecture. */
+.msg {
+  display: flex; align-items: flex-start; gap: 9px;
+  margin: 16px 0 20px; min-height: 34px;
+  font-size: 13px; color: var(--fg);
+}
+.dot {
+  flex: none; width: 7px; height: 7px; margin-top: 6px;
+  border: 1px solid var(--dim); border-radius: 50%;
+}
+.dot.on { background: var(--fg); border-color: var(--fg) }
+.dot.off { background: transparent; border-color: var(--dim) }
+.dot.busy { background: var(--dim); border-color: var(--dim); animation: pulse 1s infinite ease-in-out }
+.dot.err { background: var(--fg); border-color: var(--fg); border-radius: 0 }
+@keyframes pulse { 50% { opacity: .25 } }
+.msg.err span:last-child { text-decoration: underline; text-underline-offset: 3px }
+
+/* Actions : mêmes rectangles pour tout, inversion au doigt. */
+.act {
+  display: flex; align-items: center; justify-content: space-between;
+  width: 100%; margin-top: 8px; padding: 0 14px; height: 50px;
+  border: 1px solid var(--edge); border-radius: 4px;
+  background: transparent; color: var(--fg);
+  font: inherit; font-size: 13px; font-weight: 500; letter-spacing: .07em; text-transform: uppercase;
+  text-align: left; text-decoration: none; cursor: pointer;
+  transition: background .12s, color .12s, border-color .12s, opacity .12s;
+}
+.act:active { background: var(--fg); color: var(--bg); border-color: var(--fg) }
+.act:disabled { opacity: .35; cursor: default }
+.act.primary { background: var(--fg); color: var(--bg); border-color: var(--fg); font-weight: 700 }
+.act.primary:active { background: var(--press); border-color: var(--press) }
+.act.armed { background: var(--fg); color: var(--bg); border-color: var(--fg) }
+
+.group { margin-top: 24px }
+.pair { display: grid; grid-template-columns: 1fr 1fr; gap: 8px }
+.pair .act { margin-top: 0 }
+
+/* État de la tour : lignes étiquette / valeur. */
+.rows { margin: 0; padding: 0; border-top: 1px solid var(--line) }
+.rows div {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 14px;
+  padding: 11px 1px; border-bottom: 1px solid var(--line);
+}
+.rows dt { font-size: 10px; letter-spacing: .14em; text-transform: uppercase; color: var(--dim) }
+.rows dd {
+  margin: 0; font-size: 13px; text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.rows dd.weak { color: var(--dim) }
+
+label { display: block; margin: 0 0 9px; font-size: 10px; letter-spacing: .2em; text-transform: uppercase; color: var(--dim) }
+input {
+  width: 100%; height: 48px; margin-bottom: 10px; padding: 0 14px;
+  border: 1px solid var(--edge); border-radius: 4px;
+  background: var(--bg); color: var(--fg);
+  font: inherit; letter-spacing: .08em; outline: none;
+}
+input:focus { border-color: var(--fg) }
+
+.foot { margin: 30px 0 0; padding-top: 16px; border-top: 1px solid var(--line) }
+.ghost {
+  display: block; padding: 0; border: 0; background: none; color: var(--dim);
+  font: inherit; font-size: 11px; letter-spacing: .1em; text-transform: uppercase;
+  text-decoration: underline; text-underline-offset: 3px; cursor: pointer;
+}
+.ghost:active { color: var(--fg) }
+"""
+
+SCRIPT = """
+(() => {
+  "use strict";
+
+  const $ = (selector) => document.querySelector(selector);
+  const STORE = "pcControlKey";
+  const POLL_MS = 25000;         // rafraîchissement de fond
+  const WAKE_POLL_MS = 6000;     // surveillance après un Wake-on-LAN
+  const WAKE_WINDOW_MS = 150000;
+
+  const gate = $("#gate");
+  const app = $("#app");
+  const keyField = $("#key");
+  const dot = $("#dot");
+  const msg = $("#msg");
+  const msgText = $("#msgText");
+  const rows = $("#rows");
+  const hostName = $("#host");
+
+  let key = localStorage.getItem(STORE) || "";
+  let busy = false;
+  let wakeUntil = 0;
+  let armed = null;
+
+  // La clé est retenue définitivement sur ce téléphone : jamais redemandée, même après
+  // fermeture de l'application ou redémarrage. On accepte aussi un lien d'accès de la
+  // forme .../#k=LA_CLE ; le fragment n'est jamais envoyé au serveur et il est effacé
+  // de l'historique dès qu'il est lu.
+  const linkKey = new URLSearchParams(location.hash.slice(1)).get("k");
+  if (linkKey && linkKey.trim()) {
+    key = linkKey.trim();
+    localStorage.setItem(STORE, key);
+    history.replaceState(null, "", location.pathname + location.search);
+  }
+  // Empêche Chrome d'effacer la clé quand il fait de la place.
+  if (navigator.storage && navigator.storage.persist) {
+    navigator.storage.persist().catch(() => {});
+  }
+
+  // Chaque ligne d'état : étiquette, valeur lue dans /api/status, valeur grisée si à surveiller.
+  const READINGS = [
+    ["Tour", (d) => d.online ? (d.control_ready ? "En ligne" : "Pont HS") : "Éteinte",
+      (d) => !d.online],
+    ["Parsec", (d) => !d.pc ? "—"
+      : d.pc.parsec_ready ? "Hôte prêt"
+      : !d.pc.parsec_host ? "Hébergement off"
+      : "À partager", (d) => !d.pc || !d.pc.parsec_ready],
+    ["Codex", (d) => !d.pc ? "—" : d.pc.codex ? "Ouvert" : "Fermé", (d) => !d.pc || !d.pc.codex],
+    ["Ventilos", (d) => !d.pc ? "—" : d.pc.fan_control ? "FanControl" : "BIOS seul",
+      (d) => !d.pc || !d.pc.fan_control],
+    ["Mode", (d) => !d.pc ? "—" : d.pc.mode === "night" ? "Nuit" : "Normal"],
+    ["Depuis", (d) => d.pc ? duration(d.pc.uptime_minutes) : "—"],
+    ["RAM libre", (d) => d.pc ? d.pc.memory_free_gb + " Go" : "—"]
+  ];
+
+  function duration(minutes) {
+    if (typeof minutes !== "number") return "—";
+    const h = Math.floor(minutes / 60);
+    const m = minutes % 60;
+    return h ? h + " h " + String(m).padStart(2, "0") : m + " min";
+  }
+
+  function tap() {
+    if (navigator.vibrate) navigator.vibrate(8);
+  }
+
+  function setMessage(text, tone) {
+    dot.className = "dot " + (tone === "err" ? "err" : tone || "");
+    msg.className = "msg" + (tone === "err" ? " err" : "");
+    msgText.textContent = text;
+  }
+
+  function setBusy(value) {
+    busy = value;
+    app.querySelectorAll("button").forEach((button) => { button.disabled = value; });
+  }
+
+  function disarm() {
+    if (!armed) return;
+    armed.button.classList.remove("armed");
+    armed.button.textContent = armed.label;
+    clearTimeout(armed.timer);
+    armed = null;
+  }
+
+  function render(data) {
+    if (data.pc && data.pc.computer) hostName.textContent = data.pc.computer;
+    rows.textContent = "";
+    for (const [label, read, weak] of READINGS) {
+      const line = document.createElement("div");
+      const dt = document.createElement("dt");
+      const dd = document.createElement("dd");
+      dt.textContent = label;
+      dd.textContent = read(data);
+      if (weak && weak(data)) dd.className = "weak";
+      line.append(dt, dd);
+      rows.append(line);
+    }
+  }
+
+  async function api(path, method, payload) {
+    const options = { method: method || "GET", headers: { Authorization: "Bearer " + key } };
+    if (payload) {
+      options.headers["Content-Type"] = "application/json";
+      options.body = JSON.stringify(payload);
+    }
+    let response;
+    try {
+      response = await fetch(path, options);
+    } catch (error) {
+      throw new Error("Pas de réseau.");
+    }
+    const data = await response.json().catch(() => ({}));
+    if (response.status === 401) {
+      const failure = new Error("Clé refusée.");
+      failure.unauthorized = true;
+      throw failure;
+    }
+    if (!response.ok) throw new Error(data.error || "Action impossible.");
+    return data;
+  }
+
+  function lock(reason) {
+    localStorage.removeItem(STORE);
+    key = "";
+    app.hidden = true;
+    gate.hidden = false;
+    keyField.value = "";
+    if (reason) keyField.placeholder = reason;
+  }
+
+  // Un /api/status coûte un aller-retour SSH : silent = ne pas clignoter à chaque tick.
+  async function refresh(silent) {
+    if (busy) return;
+    if (!silent) { setBusy(true); setMessage("Lecture…", "busy"); }
+    try {
+      const data = await api("/api/status");
+      render(data);
+      setMessage(data.message || "À jour.", data.online ? "on" : "off");
+    } catch (error) {
+      if (error.unauthorized) return lock("Clé refusée");
+      if (!silent) setMessage(error.message, "err");
+    } finally {
+      if (!silent) setBusy(false);
+    }
+  }
+
+  async function control(action, label) {
+    setBusy(true);
+    setMessage(label + "…", "busy");
+    try {
+      const data = await api("/api/control", "POST", { action });
+      setMessage(data.message || data.error || "Terminé.", data.ok === false ? "err" : "on");
+      setBusy(false);
+      await refresh(true);
+    } catch (error) {
+      setBusy(false);
+      if (error.unauthorized) return lock("Clé refusée");
+      setMessage(error.message, "err");
+    }
+  }
+
+  async function wake() {
+    setBusy(true);
+    setMessage("Allumage…", "busy");
+    try {
+      const data = await api("/api/wake", "POST");
+      setMessage(data.message || "Signal envoyé.", data.online ? "on" : "busy");
+      wakeUntil = Date.now() + WAKE_WINDOW_MS;
+      setBusy(false);
+      watchWake();
+    } catch (error) {
+      setBusy(false);
+      if (error.unauthorized) return lock("Clé refusée");
+      setMessage(error.message, "err");
+    }
+  }
+
+  // Après un réveil, on interroge la tour jusqu'à ce qu'elle réponde.
+  async function watchWake() {
+    if (Date.now() > wakeUntil || busy) return;
+    try {
+      const data = await api("/api/status");
+      render(data);
+      if (data.online) {
+        wakeUntil = 0;
+        setMessage(data.message || "Tour allumée.", "on");
+        return;
+      }
+      setMessage("Démarrage…", "busy");
+    } catch (error) {
+      if (error.unauthorized) return lock("Clé refusée");
+    }
+    setTimeout(watchWake, WAKE_POLL_MS);
+  }
+
+  function unlock(value) {
+    key = value.trim();
+    if (!key) return;
+    localStorage.setItem(STORE, key);
+    gate.hidden = true;
+    app.hidden = false;
+    refresh(false).then(runShortcut);
+  }
+
+  // Raccourcis de l'icône Android : /?do=wake, /?do=share-parsec, /?do=launch-codex
+  function runShortcut() {
+    const wanted = new URLSearchParams(location.search).get("do");
+    if (!wanted) return;
+    history.replaceState(null, "", "/");
+    if (wanted === "wake") return wake();
+    const button = app.querySelector('[data-action="' + wanted + '"]');
+    if (button && !button.dataset.confirm) button.click();
+  }
+
+  $("#unlock").addEventListener("submit", (event) => {
+    event.preventDefault();
+    unlock(keyField.value);
+  });
+  $("#wake").addEventListener("click", () => { tap(); disarm(); wake(); });
+  $("#refresh").addEventListener("click", () => { tap(); disarm(); refresh(false); });
+  $("#forget").addEventListener("click", () => { tap(); lock("Clé"); });
+
+  app.querySelectorAll("[data-action]").forEach((button) => {
+    const label = button.textContent.trim();
+    button.addEventListener("click", () => {
+      tap();
+
+      // Actions lourdes : deux appuis, sans boîte de dialogue.
+      if (button.dataset.confirm && (!armed || armed.button !== button)) {
+        disarm();
+        button.classList.add("armed");
+        button.textContent = "Confirmer";
+        armed = { button, label, timer: setTimeout(disarm, 5000) };
+        return;
+      }
+      disarm();
+      control(button.dataset.action, label);
+    });
+  });
+
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden && key) refresh(true);
+  });
+  setInterval(() => { if (!document.hidden && key && !wakeUntil) refresh(true); }, POLL_MS);
+
+  if ("serviceWorker" in navigator) {
+    navigator.serviceWorker.register("/sw.js").catch(() => {});
+  }
+
+  if (key) {
+    gate.hidden = true;
+    app.hidden = false;
+    refresh(false).then(runShortcut);
+  }
+})();
+"""
+
+BODY = """
+<main id="gate">
+  <h1>PC Control</h1>
+  <form id="unlock" class="group">
+    <label for="key">Clé</label>
+    <input id="key" type="password" autocomplete="current-password" spellcheck="false"
+           autocapitalize="off" placeholder="Une seule fois">
+    <button class="act primary" type="submit">Entrer</button>
+  </form>
+</main>
+
+<main id="app" hidden>
+  <div class="head"><h1>PC Control</h1><span id="host">GTOL</span></div>
+
+  <p id="msg" class="msg"><span class="dot busy" id="dot"></span><span id="msgText">…</span></p>
+
+  <div class="pair">
+    <button class="act primary" id="wake">Allumer</button>
+    <button class="act" id="refresh">Vérifier</button>
+  </div>
+
+  <dl class="rows group" id="rows"></dl>
+
+  <div class="group">
+    <button class="act" data-action="share-parsec">Partager le PC</button>
+    <button class="act" data-action="launch-codex">Lancer Codex</button>
+    <a class="act" href="https://parsec.app/" target="_blank" rel="noopener noreferrer">Ouvrir Parsec ↗</a>
+  </div>
+
+  <div class="group pair">
+    <button class="act" data-action="normal">Normal</button>
+    <button class="act" data-action="night">Nuit</button>
+  </div>
+
+  <div class="group">
+    <button class="act" data-action="repair-parsec">Réparer Parsec</button>
+    <button class="act" data-action="repair-fans">Ventilateurs</button>
+    <button class="act" data-action="hibernate" data-confirm="1">Éteindre (réveil WOL)</button>
+    <button class="act" data-action="reboot" data-confirm="1">Redémarrer</button>
+  </div>
+
+  <div class="foot"><button class="ghost" id="forget">Oublier la clé</button></div>
+</main>
+"""
+
+PAGE = """<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#000000">
+<meta name="color-scheme" content="dark">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="PC Control">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" type="image/svg+xml" href="/icon.svg">
+<link rel="apple-touch-icon" href="/icon-192.png">
+<title>PC Control</title>
+<style>__STYLE__</style>
+</head>
+<body>
+<noscript><main><h1>PC Control</h1><p class="group">JavaScript requis.</p></main></noscript>
+__BODY__
+<script>__SCRIPT__</script>
+</body>
+</html>
+""".replace("__STYLE__", STYLE).replace("__BODY__", BODY).replace("__SCRIPT__", SCRIPT)
+
+
+MANIFEST = {
+    "name": "GTOL PC Control",
+    "short_name": "PC Control",
+    "description": "Réveil, partage et dépannage distant de la tour GTOL",
+    "id": "/",
+    "start_url": "/",
+    "scope": "/",
+    "display": "standalone",
+    "display_override": ["standalone", "minimal-ui"],
+    "orientation": "portrait",
+    "background_color": "#000000",
+    "theme_color": "#000000",
+    "categories": ["utilities"],
+    "icons": [
+        {"src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any"},
+        {"src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any"},
+        {"src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable"},
+    ],
+    "shortcuts": [
+        {"name": "Allumer la tour", "short_name": "Allumer", "url": "/?do=wake"},
+        {"name": "Partager le PC", "short_name": "Partager", "url": "/?do=share-parsec"},
+        {"name": "Lancer Codex", "short_name": "Codex", "url": "/?do=launch-codex"},
+    ],
+}
+
+ICON = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+<rect width="512" height="512" fill="#000000"/>
+<path d="M256 150v112" fill="none" stroke="#ffffff" stroke-width="30" stroke-linecap="round"/>
+<path d="M186 196a124 124 0 1 0 140 0" fill="none" stroke="#ffffff" stroke-width="30" stroke-linecap="round"/>
+</svg>"""
+
+SERVICE_WORKER = """const CACHE = "pc-control-v3";
+const SHELL = ["/", "/manifest.webmanifest", "/icon.svg", "/icon-192.png", "/icon-512.png"];
+self.addEventListener("install", (event) => {
+  self.skipWaiting();
+  event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(SHELL)));
+});
+self.addEventListener("activate", (event) => {
+  event.waitUntil(
+    caches.keys()
+      .then((keys) => Promise.all(keys.filter((key) => key !== CACHE).map((key) => caches.delete(key))))
+      .then(() => self.clients.claim())
+  );
+});
+self.addEventListener("fetch", (event) => {
+  const request = event.request;
+  if (request.method !== "GET" || new URL(request.url).pathname.startsWith("/api/")) return;
+  event.respondWith(
+    fetch(request)
+      .then((response) => {
+        const copy = response.clone();
+        caches.open(CACHE).then((cache) => cache.put(request, copy)).catch(() => {});
+        return response;
+      })
+      .catch(() => caches.match(request).then((hit) => hit || caches.match("/")))
+  );
+});
+"""
+
+
+def make_png_icon(size):
+    """Icône monochrome (fond noir, symbole d'alimentation blanc), sans dépendance."""
+    pixels = bytearray()
+    center = (size - 1) / 2
+    for y in range(size):
+        pixels.append(0)  # filtre de ligne PNG
+        for x in range(size):
+            nx = (x - center) / size
+            ny = (y - center) / size
+            distance = (nx * nx + ny * ny) ** 0.5
+            ring = 0.205 < distance < 0.250
+            opening = ny < -0.10 and abs(nx) < 0.105
+            stem = abs(nx) < 0.023 and -0.255 < ny < 0.015
+            white = (ring and not opening) or stem
+            pixels.extend((255, 255, 255, 255) if white else (0, 0, 0, 255))
+
+    def chunk(kind, data):
+        return (
+            struct.pack(">I", len(data))
+            + kind
+            + data
+            + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
+        )
+
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", struct.pack(">IIBBBBB", size, size, 8, 6, 0, 0, 0))
+        + chunk(b"IDAT", zlib.compress(bytes(pixels), 9))
+        + chunk(b"IEND", b"")
+    )
+
+
+HTML_TYPE = "text/html; charset=utf-8"
+JSON_TYPE = "application/json; charset=utf-8"
+DAY = "public, max-age=86400"
+
+# L'interface est isolée du backend afin de pouvoir évoluer sans toucher aux
+# garde-fous Wake-on-LAN et SSH.
+from portal_ui import MANIFEST, PAGE, SERVICE_WORKER
+
+# chemin -> (corps, type, cache)
+STATIC_ROUTES = {
+    "/": (PAGE.encode(), HTML_TYPE, "no-cache"),
+    "/manifest.webmanifest": (
+        json.dumps(MANIFEST, ensure_ascii=False).encode(),
+        "application/manifest+json; charset=utf-8",
+        "public, max-age=3600",
+    ),
+    "/icon.svg": (ICON.encode(), "image/svg+xml; charset=utf-8", DAY),
+    "/icon-192.png": (make_png_icon(192), "image/png", DAY),
+    "/icon-512.png": (make_png_icon(512), "image/png", DAY),
+    "/sw.js": (SERVICE_WORKER.encode(), "application/javascript; charset=utf-8", "no-cache"),
+}
+
+
+# --------------------------------------------------------------------------- #
+# Accès, réseau, pont Windows
+# --------------------------------------------------------------------------- #
+
+
+def authorized(header):
+    prefix = "Bearer "
+    return bool(
+        header
+        and header.startswith(prefix)
+        and hmac.compare_digest(header[len(prefix):], TOKEN)
+    )
+
+
+def rate_limited(address):
+    now = time.monotonic()
+    entries = ATTEMPTS[address]
+    while entries and now - entries[0] > RATE_WINDOW_SECONDS:
+        entries.popleft()
+    if len(entries) >= RATE_MAX_REQUESTS:
+        return True
+    entries.append(now)
+    return False
+
+
+def resolve_pc_ip():
+    try:
+        return socket.gethostbyname(PC_HOST)
+    except socket.gaierror:
+        return PC_IP
+
+
+def is_online():
+    target = resolve_pc_ip()
+    arp = subprocess.run(
+        ["arping", "-c", "1", "-w", "1", "-I", INTERFACE, target],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+    if arp.returncode == 0:
+        return True
+    return (
+        subprocess.run(
+            ["ping", "-c", "1", "-W", "1", target],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        ).returncode
+        == 0
+    )
+
+
+def set_manual_off(enabled):
+    """Suspend le watchdog après une extinction volontaire, jusqu'au prochain Wake."""
+    if enabled:
+        temporary = MANUAL_OFF_FILE + ".tmp"
+        with open(temporary, "w", encoding="ascii") as handle:
+            handle.write(str(int(time.time())))
+        os.replace(temporary, MANUAL_OFF_FILE)
+        return
+    try:
+        os.unlink(MANUAL_OFF_FILE)
+    except FileNotFoundError:
+        pass
+
+
+def wake():
+    raw = bytes.fromhex(PC_MAC.replace(":", "").replace("-", ""))
+    packet = b"\xff" * 6 + raw * 16
+    broadcasts = {BROADCAST, "255.255.255.255"}
+    addresses = subprocess.run(
+        ["ip", "-4", "addr", "show", "dev", INTERFACE],
+        capture_output=True,
+        text=True,
+        check=False,
+    ).stdout
+    match = re.search(r"\bbrd\s+(\d+\.\d+\.\d+\.\d+)", addresses)
+    if match:
+        broadcasts.add(match.group(1))
+    targets = broadcasts | {resolve_pc_ip()}
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        for target in targets:
+            for port in (9, 7):
+                for _ in range(3):
+                    sock.sendto(packet, (target, port))
+                    time.sleep(0.08)
+
+
+def decode_windows(raw):
+    """Windows renvoie parfois du CP1252 sur SSH : ne jamais échouer sur un octet isolé."""
+    for encoding in ("utf-8", "cp1252"):
+        try:
+            return raw.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+    return raw.decode("utf-8", "replace")
+
+
+def pc_control(action):
+    """Exécute une action du pont Windows par SSH. `action` vient de CONTROL_ACTIONS."""
+    command = [
+        "/usr/bin/ssh",
+        "-i",
+        SSH_KEY,
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "ConnectTimeout=6",
+        "-o",
+        "StrictHostKeyChecking=accept-new",
+        "-o",
+        f"UserKnownHostsFile={SSH_KNOWN_HOSTS}",
+        f"{PC_USER}@{PC_HOST}",
+        action,
+    ]
+    try:
+        result = subprocess.run(command, capture_output=True, timeout=90, check=False)
+    except subprocess.TimeoutExpired as error:
+        raise RuntimeError("La tour ne répond pas à temps.") from error
+
+    output = decode_windows(result.stdout).strip()
+    errors = decode_windows(result.stderr).strip()
+
+    # Les scripts Windows peuvent écrire des lignes de journal : on garde le dernier JSON.
+    parsed = None
+    for line in reversed(output.splitlines()):
+        try:
+            parsed = json.loads(line)
+            break
+        except json.JSONDecodeError:
+            continue
+
+    if result.returncode != 0:
+        detail = ""
+        if isinstance(parsed, dict) and parsed.get("error"):
+            detail = parsed["error"]
+        elif errors:
+            detail = errors.splitlines()[-1]
+        raise RuntimeError(detail or "Le pont Windows n'est pas joignable.")
+    if not isinstance(parsed, dict):
+        return {"ok": True, "message": output or "Action terminée."}
+    return parsed
+
+
+def read_status():
+    online = is_online()
+    pc = None
+    control_ready = False
+    if online:
+        try:
+            pc = pc_control("Status")
+            control_ready = bool(pc.get("ok"))
+        except RuntimeError:
+            pass
+
+    if control_ready:
+        message = "Tour prête."
+        if pc and not pc.get("parsec_ready"):
+            message = "Parsec hôte à remettre en ligne."
+        elif pc and not pc.get("fan_control"):
+            message = "FanControl arrêté."
+    elif online:
+        message = "Pont Windows injoignable."
+    else:
+        message = "Tour éteinte."
+
+    try:
+        with open("/proc/uptime", "r", encoding="ascii") as handle:
+            gateway_uptime_minutes = int(float(handle.read().split()[0]) // 60)
+    except (OSError, ValueError, IndexError):
+        gateway_uptime_minutes = None
+
+    return {
+        "online": online,
+        "control_ready": control_ready,
+        "pc": pc,
+        "message": message,
+        "updated_at": int(time.time()),
+        "gateway": {
+            "uptime_minutes": gateway_uptime_minutes,
+            "watchdog_suspended": os.path.exists(MANUAL_OFF_FILE),
+        },
+    }
+
+
+# --------------------------------------------------------------------------- #
+# HTTP
+# --------------------------------------------------------------------------- #
+
+
+class Handler(BaseHTTPRequestHandler):
+    # On reste en HTTP/1.0 (pas de keep-alive) : certaines réponses d'erreur partent
+    # avant la lecture du corps de la requête, ce qui désynchroniserait une connexion réutilisée.
+    server_version = "RemoteWake/4.0"
+
+    def send_bytes(self, status, body, content_type, cache="no-store"):
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", cache)
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.send_header("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+        self.send_header("Cross-Origin-Opener-Policy", "same-origin")
+        self.send_header(
+            "Content-Security-Policy",
+            "default-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; "
+            "connect-src 'self'; img-src 'self'; frame-ancestors 'none'; base-uri 'none'; "
+            "form-action 'self'",
+        )
+        self.end_headers()
+        self.wfile.write(body)
+
+    def send_json(self, status, payload):
+        self.send_bytes(
+            status, json.dumps(payload, ensure_ascii=False).encode(), JSON_TYPE
+        )
+
+    def read_json(self):
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            raise ValueError("Requête invalide")
+        if length < 2 or length > 2048:
+            raise ValueError("Requête invalide")
+        return json.loads(self.rfile.read(length))
+
+    def guard_api(self):
+        """Limite de débit puis authentification, pour toute route /api/*."""
+        if rate_limited(self.client_address[0]):
+            self.send_json(429, {"error": "Trop de requêtes, attends une minute."})
+            return False
+        if not authorized(self.headers.get("Authorization")):
+            self.send_json(401, {"error": "Clé incorrecte"})
+            return False
+        return True
+
+    def do_GET(self):
+        path = self.path.split("?", 1)[0]
+
+        static = STATIC_ROUTES.get(path)
+        if static:
+            body, content_type, cache = static
+            self.send_bytes(200, body, content_type, cache)
+            return
+
+        if path == "/health":
+            self.send_json(200, {"ok": True})
+            return
+
+        if path == "/.well-known/assetlinks.json":
+            try:
+                with open(ASSETLINKS_FILE, "rb") as handle:
+                    body = handle.read()
+            except OSError:
+                self.send_json(404, {"error": "Introuvable"})
+                return
+            self.send_bytes(200, body, JSON_TYPE, "public, max-age=3600")
+            return
+
+        if path == "/api/status":
+            if not self.guard_api():
+                return
+            self.send_json(200, read_status())
+            return
+
+        self.send_json(404, {"error": "Introuvable"})
+
+    def do_POST(self):
+        path = self.path.split("?", 1)[0]
+        if path not in ("/api/wake", "/api/control"):
+            self.send_json(404, {"error": "Introuvable"})
+            return
+        if not self.guard_api():
+            return
+
+        if path == "/api/wake":
+            set_manual_off(False)
+            online = is_online()
+            wake()
+            self.send_json(
+                200 if online else 202,
+                {
+                    "online": online,
+                    "message": (
+                        "Tour déjà allumée."
+                        if online
+                        else "Signal envoyé, démarrage en cours."
+                    ),
+                },
+            )
+            return
+
+        try:
+            payload = self.read_json()
+        except (ValueError, json.JSONDecodeError):
+            self.send_json(400, {"error": "Requête invalide"})
+            return
+
+        requested = payload.get("action") if isinstance(payload, dict) else None
+        action = CONTROL_ACTIONS.get(requested)
+        if not action or action == "Status":
+            self.send_json(400, {"error": "Action non autorisée"})
+            return
+        if not is_online():
+            self.send_json(
+                409, {"online": False, "error": "La tour est éteinte, allume-la d'abord."}
+            )
+            return
+        manual_off = action == "Hibernate"
+        try:
+            if manual_off:
+                set_manual_off(True)
+            result = pc_control(action)
+        except RuntimeError as error:
+            if manual_off:
+                set_manual_off(False)
+            self.send_json(503, {"online": True, "error": str(error)})
+            return
+        if manual_off and not result.get("ok", True):
+            set_manual_off(False)
+        self.send_json(
+            200 if result.get("ok", True) else 500, {"online": True, **result}
+        )
+
+    def log_message(self, fmt, *args):
+        print("%s - %s" % (self.address_string(), fmt % args), flush=True)
+
+
+if __name__ == "__main__":
+    ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()

@@ -1,0 +1,22 @@
+#!/bin/sh
+set -eu
+
+. /etc/remote-wake.env
+
+MANUAL_OFF_FILE=/var/lib/remote-wake/manual-off
+
+while true; do
+    if [ -e "$MANUAL_OFF_FILE" ]; then
+        sleep 30
+        continue
+    fi
+
+    if ! arping -c 1 -w 2 -I "${REMOTE_WAKE_INTERFACE:-wlan0}" \
+        "${REMOTE_WAKE_HOST:-gtol.local}" >/dev/null 2>&1; then
+        curl -fsS \
+            -X POST \
+            -H "Authorization: Bearer ${REMOTE_WAKE_TOKEN}" \
+            http://127.0.0.1:8789/api/wake >/dev/null 2>&1 || true
+    fi
+    sleep 30
+done

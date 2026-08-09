@@ -1,0 +1,257 @@
+{
+  "__VERSION__": "265",
+  "FanControl": {
+    "Controls": [
+      {
+        "NickName": "Fan #1",
+        "Identifier": "/lpc/nct6799d/control/0",
+        "IsHidden": false,
+        "Enable": true,
+        "SelectedFanCurve": null,
+        "SelectedOffset": 0,
+        "PairedFanSensor": null,
+        "SelectedStart": 0,
+        "SelectedStop": 0,
+        "MinimumPercent": 0,
+        "SelectedCommandStepUp": 8,
+        "SelectedCommandStepDown": 8,
+        "ManualControlValue": 20,
+        "ManualControl": true,
+        "ForceApply": true,
+        "Calibration": null
+      },
+      {
+        "NickName": "Fan #2",
+        "Identifier": "/lpc/nct6799d/control/1",
+        "IsHidden": false,
+        "Enable": true,
+        "SelectedFanCurve": null,
+        "SelectedOffset": 0,
+        "PairedFanSensor": null,
+        "SelectedStart": 0,
+        "SelectedStop": 0,
+        "MinimumPercent": 0,
+        "SelectedCommandStepUp": 8,
+        "SelectedCommandStepDown": 8,
+        "ManualControlValue": 20,
+        "ManualControl": true,
+        "ForceApply": true,
+        "Calibration": null
+      },
+      {
+        "NickName": "Fan #3",
+        "Identifier": "/lpc/nct6799d/control/2",
+        "IsHidden": false,
+        "Enable": true,
+        "SelectedFanCurve": null,
+        "SelectedOffset": 0,
+        "PairedFanSensor": null,
+        "SelectedStart": 0,
+        "SelectedStop": 0,
+        "MinimumPercent": 0,
+        "SelectedCommandStepUp": 8,
+        "SelectedCommandStepDown": 8,
+        "ManualControlValue": 20,
+        "ManualControl": true,
+        "ForceApply": true,
+        "Calibration": null
+      },
+      {
+        "NickName": "Fan #4",
+        "Identifier": "/lpc/nct6799d/control/3",
+        "IsHidden": false,
+        "Enable": true,
+        "SelectedFanCurve": null,
+        "SelectedOffset": 0,
+        "PairedFanSensor": null,
+        "SelectedStart": 0,
+        "SelectedStop": 0,
+        "MinimumPercent": 0,
+        "SelectedCommandStepUp": 8,
+        "SelectedCommandStepDown": 8,
+        "ManualControlValue": 20,
+        "ManualControl": true,
+        "ForceApply": true,
+        "Calibration": null
+      },
+      {
+        "NickName": "Fan #5",
+        "Identifier": "/lpc/nct6799d/control/4",
+        "IsHidden": false,
+        "Enable": true,
+        "SelectedFanCurve": null,
+        "SelectedOffset": 0,
+        "PairedFanSensor": null,
+        "SelectedStart": 0,
+        "SelectedStop": 0,
+        "MinimumPercent": 0,
+        "SelectedCommandStepUp": 8,
+        "SelectedCommandStepDown": 8,
+        "ManualControlValue": 20,
+        "ManualControl": true,
+        "ForceApply": true,
+        "Calibration": null
+      },
+      {
+        "NickName": "Fan #6",
+        "Identifier": "/lpc/nct6799d/control/5",
+        "IsHidden": false,
+        "Enable": true,
+        "SelectedFanCurve": null,
+        "SelectedOffset": 0,
+        "PairedFanSensor": null,
+        "SelectedStart": 0,
+        "SelectedStop": 0,
+        "MinimumPercent": 0,
+        "SelectedCommandStepUp": 8,
+        "SelectedCommandStepDown": 8,
+        "ManualControlValue": 20,
+        "ManualControl": true,
+        "ForceApply": true,
+        "Calibration": null
+      },
+      {
+        "NickName": "Fan #7",
+        "Identifier": "/lpc/nct6799d/control/6",
+        "IsHidden": false,
+        "Enable": true,
+        "SelectedFanCurve": null,
+        "SelectedOffset": 0,
+        "PairedFanSensor": null,
+        "SelectedStart": 0,
+        "SelectedStop": 0,
+        "MinimumPercent": 0,
+        "SelectedCommandStepUp": 8,
+        "SelectedCommandStepDown": 8,
+        "ManualControlValue": 20,
+        "ManualControl": true,
+        "ForceApply": true,
+        "Calibration": null
+      },
+      {
+        "NickName": "Control 1 - NVIDIA GeForce RTX 4080 SUPER",
+        "Identifier": "NVApiWrapper/0-AD103-A/control/0",
+        "IsHidden": false,
+        "Enable": true,
+        "SelectedFanCurve": null,
+        "SelectedOffset": 0,
+        "PairedFanSensor": null,
+        "SelectedStart": 0,
+        "SelectedStop": 0,
+        "MinimumPercent": 0,
+        "SelectedCommandStepUp": 8,
+        "SelectedCommandStepDown": 8,
+        "ManualControlValue": 0,
+        "ManualControl": true,
+        "ForceApply": true,
+        "Calibration": null
+      },
+      {
+        "NickName": "Control 2 - NVIDIA GeForce RTX 4080 SUPER",
+        "Identifier": "NVApiWrapper/0-AD103-A/control/1",
+        "IsHidden": false,
+        "Enable": true,
+        "SelectedFanCurve": null,
+        "SelectedOffset": 0,
+        "PairedFanSensor": null,
+        "SelectedStart": 0,
+        "SelectedStop": 0,
+        "MinimumPercent": 0,
+        "SelectedCommandStepUp": 8,
+        "SelectedCommandStepDown": 8,
+        "ManualControlValue": 0,
+        "ManualControl": true,
+        "ForceApply": true,
+        "Calibration": null
+      }
+    ],
+    "CustomSensors": [],
+    "FanCurves": [],
+    "FanSensors": [
+      {
+        "Identifier": "/lpc/nct6799d/fan/0",
+        "IsHidden": false,
+        "NickName": "Fan #1"
+      },
+      {
+        "Identifier": "/lpc/nct6799d/fan/1",
+        "IsHidden": false,
+        "NickName": "Fan #2"
+      },
+      {
+        "Identifier": "/lpc/nct6799d/fan/2",
+        "IsHidden": false,
+        "NickName": "Fan #3"
+      },
+      {
+        "Identifier": "/lpc/nct6799d/fan/3",
+        "IsHidden": false,
+        "NickName": "Fan #4"
+      },
+      {
+        "Identifier": "/lpc/nct6799d/fan/4",
+        "IsHidden": false,
+        "NickName": "Fan #5"
+      },
+      {
+        "Identifier": "/lpc/nct6799d/fan/5",
+        "IsHidden": false,
+        "NickName": "Fan #6"
+      },
+      {
+        "Identifier": "/lpc/nct6799d/fan/6",
+        "IsHidden": false,
+        "NickName": "Fan #7"
+      },
+      {
+        "Identifier": "NVApiWrapper/0-AD103-A/fan/0",
+        "IsHidden": false,
+        "NickName": "Fan 1 - NVIDIA GeForce RTX 4080 SUPER"
+      },
+      {
+        "Identifier": "NVApiWrapper/0-AD103-A/fan/1",
+        "IsHidden": false,
+        "NickName": "Fan 2 - NVIDIA GeForce RTX 4080 SUPER"
+      }
+    ],
+    "TemperatureSensors": []
+  },
+  "MainWindow": {
+    "Fahrenheit": false,
+    "HideCalibration": false,
+    "HideFanSpeedCards": true,
+    "HorizontalUIOrientation": false,
+    "PrimaryColor": "#FF607D8B",
+    "SecondaryColor": "#FFAEEA00",
+    "SelectedTheme": "",
+    "ShowHiddenCards": false,
+    "SyncThemeWithWindows": true,
+    "SyncTrayIconColorWithWindows": true,
+    "TrayIconColor": null,
+    "TrayIcons": []
+  },
+  "Sensors": {
+    "AdlxWrapperSettings": {
+      "Enabled": true
+    },
+    "DisabledPlugins": [],
+    "DisableStorageSensors": false,
+    "LibreHardwareMonitorSettings": {
+      "Controller": true,
+      "CPU": true,
+      "EmbeddedEC": true,
+      "GPU": true,
+      "Memory": true,
+      "Motherboard": true,
+      "PowerMonitor": true,
+      "PSU": true,
+      "Storage": true,
+      "StorageUpdateInterval": "00:01:00",
+      "ZeroRPMOverride": true
+    },
+    "NvAPIWrapperSettings": {
+      "Enabled": true,
+      "ZeroRPMOverride": true
+    }
+  }
+}
