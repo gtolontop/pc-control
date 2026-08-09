@@ -51,8 +51,34 @@ Windows OpenSSH
 Le pont SSH tourne en session non interactive : il n'a ni écran, ni presse-papiers,
 ni clavier. `pccontrol-agent.ps1` tourne dans la session ouverte de l'utilisateur
 (tâche planifiée `PCControl_SessionAgent`, déclenchée à l'ouverture de session) et
-exécute les actions qui exigent un vrai bureau. Le pont communique avec lui par un
-dossier de files d'attente (`C:\PCMode\bridge\in` / `out`), jamais par le réseau.
+exécute les actions qui exigent un vrai bureau.
+
+## Canal direct LAN (vitesse)
+
+Le point critique de latence est le trajet Raspberry -> Windows. Toutes les variantes
+SSH se sont révélées cassées ou lentes sur le Win32-OpenSSH de la tour (multiplexage
+qui croise les sorties de commandes concurrentes, stdin partiel après la première
+ligne, redirection de port ~2 s, démarrage de `powershell.exe` ~0,4-1,8 s par action
+sous charge). On inverse donc le sens :
+
+- le Raspberry écoute un port TCP sur le réseau local (`0.0.0.0:8790`) ;
+- il demande à l'agent, via une commande `Run` ponctuelle (`ConnectBack`), de s'y
+  connecter en TCP direct ; le jeton est un condensé stable de la clé Bearer ;
+- une fois connecté, **toutes** les actions bureau et les trames d'écran passent par
+  ce socket réutilisé, sans SSH ni démarrage de processus.
+
+Résultat mesuré : entrée souris/clavier ~8 ms, flux d'écran ~26 images/s. L'agent se
+reconnecte tout seul si la connexion tombe ; un repli SSH ponctuel (`Run` / dossier
+de files d'attente `C:\PCMode\bridge\in`|`out`) prend le relais tant que le canal
+direct n'est pas établi (tour qui vient de démarrer).
+
+### Flux d'écran
+
+`pccontrol-capture.ps1 -Stream` est un daemon qui capture en continu, déduplique les
+images identiques (seule la position du curseur change) et écrit la dernière trame
+sur disque. L'agent la renvoie en octets JPEG bruts (aucun base64 côté Windows). Le
+curseur est transmis séparément et dessiné/interpolé côté client : un écran statique
+où seule la souris bouge coûte ~0 octet.
 
 ## Contrainte antivirus (important)
 

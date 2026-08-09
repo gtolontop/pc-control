@@ -17,48 +17,65 @@
     Aucune commande arbitraire hors de cette liste n'est possible.
 #>
 
-param([Parameter(Mandatory = $true)][string]$Payload)
+param(
+    [string]$Payload,
+    # Mode persistant : lit des lignes JSON sur stdin, répond une ligne par requête.
+    # Le Raspberry garde ainsi UNE connexion SSH ouverte et supprime le coût de
+    # poignée de main + démarrage de processus à chaque action (~500 ms -> ~5 ms).
+    [switch]$Loop
+)
 
 $ErrorActionPreference = 'Stop'
+
+# Sortie en UTF-8 pour que les accents des messages arrivent intacts au Raspberry.
+# NE PAS toucher à InputEncoding : réaffecter l'encodage d'un stdin redirigé (pipe)
+# bloque [Console]::In.ReadLine(). L'entrée (JSON du Pi) est de l'ASCII/UTF-8 que
+# le lecteur par défaut gère sans problème.
+try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch { }
 
 $BridgeRoot = 'C:\PCMode\bridge'
 $InBox = Join-Path $BridgeRoot 'in'
 $OutBox = Join-Path $BridgeRoot 'out'
+$LiveDir = Join-Path $BridgeRoot 'live'
+$FramePath = Join-Path $LiveDir 'frame.jpg'
+$FrameMeta = Join-Path $LiveDir 'frame.json'
+$StreamControl = Join-Path $LiveDir 'stream.json'
 $Heartbeat = Join-Path $BridgeRoot 'agent.json'
 $AgentScript = 'C:\PCMode\pccontrol-agent.ps1'
-$MaxTextBytes = 262144      # lecture de fichier texte : 256 Ko
-$MaxDownloadBytes = 6291456 # téléchargement binaire : 6 Mo
+$MaxTextBytes = 262144       # lecture de fichier texte : 256 Ko
+$MaxDownloadBytes = 6291456  # téléchargement binaire d'un coup : 6 Mo
+$MaxChunkBytes = 4194304     # bloc de transfert par morceaux : 4 Mo
+
+foreach ($d in @($LiveDir)) { if (-not (Test-Path -LiteralPath $d)) { New-Item -ItemType Directory -Path $d -Force | Out-Null } }
 
 # Actions qui nécessitent le bureau interactif : déléguées à l'agent de session.
 $SessionActions = @(
-    'Screenshot', 'ScreenInfo', 'Click', 'MoveMouse', 'Scroll', 'TypeText', 'SendKey',
+    'Screenshot', 'ScreenInfo', 'Click', 'MoveMouse', 'Drag', 'Scroll', 'TypeText', 'SendKey',
     'Volume', 'Media', 'Lock', 'DisplaysOff', 'DisplaysOn', 'GetClipboard', 'SetClipboard',
     'WindowList', 'FocusWindow', 'CloseWindow', 'Launch', 'OpenPath', 'OpenUrl', 'Notify',
-    'SessionInfo', 'LogOff'
+    'SessionInfo', 'LogOff', 'StreamStart', 'StreamStop', 'ConnectBack'
 )
 
-# Actions système traitées directement par le pont.
+# Actions système traitées directement par le pont (accès disque/processus,
+# lecture des trames d'écran écrites par le daemon de capture).
 $SystemActions = @(
     'FsList', 'FsRead', 'FsWrite', 'FsDelete', 'FsMkdir', 'FsRename', 'FsDownload',
-    'Drives', 'Processes', 'KillProcess', 'Exec', 'BridgeStatus'
+    'FsStat', 'FsDownloadChunk', 'FsWriteChunk', 'Drives', 'Processes', 'KillProcess',
+    'Exec', 'BridgeStatus', 'Frame', 'ChannelInfo'
 )
 
 function Write-Json {
     param($Data)
-    # Échappe tout caractère non ASCII en \uXXXX : le flux SSH Windows n'est pas
-    # garanti UTF-8, le portail doit toujours recevoir du JSON décodable.
+    # Sortie UTF-8 directe (voir l'en-tête : OutputEncoding forcé). ConvertTo-Json
+    # -Compress produit une seule ligne (les \r\n internes sont échappés en \n),
+    # donc une réponse = une ligne. On évite toute boucle caractère par caractère :
+    # pour une image base64 de 60 Ko elle coûtait ~1 s par trame.
     $json = $Data | ConvertTo-Json -Compress -Depth 8
-    $builder = [System.Text.StringBuilder]::new()
-    foreach ($char in $json.ToCharArray()) {
-        $code = [int]$char
-        if ($code -lt 32 -or $code -gt 126) {
-            [void]$builder.Append(('\u{0:x4}' -f $code))
-        } else {
-            [void]$builder.Append($char)
-        }
-    }
-    [Console]::Out.Write($builder.ToString())
+    [Console]::Out.Write($json)
     [Console]::Out.Write("`n")
+    # Flush impératif : stdout est un pipe (SSH), sinon la dernière ligne reste
+    # tamponnée et le Raspberry attend indéfiniment sa fin de ligne.
+    [Console]::Out.Flush()
 }
 
 function Get-Arg {
@@ -123,7 +140,6 @@ function Invoke-SessionAction {
     $deadline = (Get-Date).AddSeconds(30)
     while ((Get-Date) -lt $deadline) {
         if (Test-Path -LiteralPath $outPath) {
-            Start-Sleep -Milliseconds 30
             $raw = Get-Content -LiteralPath $outPath -Raw -Encoding UTF8
             Remove-Item -LiteralPath $outPath -Force -ErrorAction SilentlyContinue
             $result = $raw | ConvertFrom-Json
@@ -142,7 +158,7 @@ function Invoke-SessionAction {
             }
             return $result
         }
-        Start-Sleep -Milliseconds 100
+        Start-Sleep -Milliseconds 12
     }
     throw 'Délai dépassé : la session ne répond pas.'
 }
@@ -357,53 +373,202 @@ function Invoke-Exec {
 function Invoke-BridgeStatus {
     return @{
         ok = $true
-        bridge = 9
+        bridge = 10
         agent_alive = Test-AgentAlive
         capabilities = @($SessionActions + $SystemActions)
     }
+}
+
+function Invoke-ChannelInfo {
+    # Donne au Raspberry le port + jeton du canal TCP rapide publié par l'agent.
+    $info = Join-Path $BridgeRoot 'channel.json'
+    if (-not (Test-Path -LiteralPath $info)) { throw 'Canal non publié (agent hors ligne ?).' }
+    $data = Get-Content -LiteralPath $info -Raw -Encoding UTF8 | ConvertFrom-Json
+    return @{ ok = $true; port = [int]$data.port; token = [string]$data.token }
+}
+
+function Invoke-FsStat {
+    param($Arguments)
+    $full = Resolve-SafePath ([string](Get-Arg $Arguments 'path' ''))
+    if (-not (Test-Path -LiteralPath $full)) { throw 'Introuvable.' }
+    $item = Get-Item -LiteralPath $full -Force
+    $isDir = $item.PSIsContainer
+    return @{
+        ok = $true
+        path = $full
+        name = $item.Name
+        dir = $isDir
+        size = if ($isDir) { $null } else { [int64]$item.Length }
+    }
+}
+
+function Invoke-FsDownloadChunk {
+    param($Arguments)
+    $full = Resolve-SafePath ([string](Get-Arg $Arguments 'path' ''))
+    if (-not (Test-Path -LiteralPath $full -PathType Leaf)) { throw 'Fichier introuvable.' }
+    $offset = [int64](Get-Arg $Arguments 'offset' 0)
+    $length = [int](Get-Arg $Arguments 'length' $MaxChunkBytes)
+    $length = [math]::Max(1, [math]::Min($MaxChunkBytes, $length))
+    $stream = [System.IO.File]::OpenRead($full)
+    try {
+        $total = $stream.Length
+        if ($offset -ge $total) { return @{ ok = $true; offset = $offset; total = $total; eof = $true; content_base64 = '' } }
+        [void]$stream.Seek($offset, [System.IO.SeekOrigin]::Begin)
+        $remaining = [int][math]::Min([int64]$length, $total - $offset)
+        $buffer = New-Object byte[] $remaining
+        $read = $stream.Read($buffer, 0, $remaining)
+        if ($read -lt $remaining) { $buffer = $buffer[0..($read - 1)] }
+        return @{
+            ok = $true
+            offset = $offset
+            read = $read
+            total = $total
+            eof = (($offset + $read) -ge $total)
+            content_base64 = [Convert]::ToBase64String($buffer)
+        }
+    } finally {
+        $stream.Dispose()
+    }
+}
+
+function Invoke-FsWriteChunk {
+    param($Arguments)
+    $full = Resolve-SafePath ([string](Get-Arg $Arguments 'path' ''))
+    $offset = [int64](Get-Arg $Arguments 'offset' 0)
+    $bytes = [Convert]::FromBase64String([string](Get-Arg $Arguments 'content_base64' ''))
+    $mode = if ($offset -eq 0) { [System.IO.FileMode]::Create } else { [System.IO.FileMode]::OpenOrCreate }
+    $stream = [System.IO.File]::Open($full, $mode, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
+    try {
+        [void]$stream.Seek($offset, [System.IO.SeekOrigin]::Begin)
+        $stream.Write($bytes, 0, $bytes.Length)
+    } finally {
+        $stream.Dispose()
+    }
+    return @{ ok = $true; offset = $offset; written = $bytes.Length; next = ($offset + $bytes.Length) }
+}
+
+function Set-StreamAlive {
+    param($Arguments)
+    # Maintient le daemon de capture en vie et applique les réglages demandés.
+    $control = @{}
+    if (Test-Path -LiteralPath $StreamControl) {
+        try { $control = (Get-Content -LiteralPath $StreamControl -Raw -Encoding UTF8 | ConvertFrom-Json) } catch { $control = $null }
+        if ($control) { $h = @{}; foreach ($p in $control.PSObject.Properties) { $h[$p.Name] = $p.Value }; $control = $h } else { $control = @{} }
+    }
+    foreach ($k in 'monitor', 'width', 'quality', 'fps') {
+        $v = Get-Arg $Arguments $k $null
+        if ($null -ne $v) { $control[$k] = $v }
+    }
+    $control['until'] = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() + 8
+    $tmp = "$StreamControl.tmp"
+    [System.IO.File]::WriteAllText($tmp, ($control | ConvertTo-Json -Compress), (New-Object System.Text.UTF8Encoding($false)))
+    Move-Item -LiteralPath $tmp -Destination $StreamControl -Force
+}
+
+function Invoke-Frame {
+    param($Arguments)
+    # Le pont lit directement la dernière trame écrite par le daemon (session 0
+    # peut lire le fichier), sans passer par l'agent : latence minimale. On ne
+    # renvoie l'image que si elle a changé depuis la séquence connue du client.
+    Set-StreamAlive $Arguments
+    if (-not (Test-Path -LiteralPath $FrameMeta)) {
+        # Aucune trame encore : demander à l'agent de lancer le daemon.
+        try { Invoke-SessionAction -Action 'StreamStart' -Arguments $Arguments | Out-Null } catch { }
+        return @{ ok = $true; ready = $false }
+    }
+    $meta = $null
+    try { $meta = Get-Content -LiteralPath $FrameMeta -Raw -Encoding UTF8 | ConvertFrom-Json } catch { }
+    if (-not $meta) { return @{ ok = $true; ready = $false } }
+
+    $since = [int](Get-Arg $Arguments 'since' -1)
+    $out = @{
+        ok = $true
+        ready = $true
+        img_seq = [int]$meta.img_seq
+        w = [int]$meta.w
+        h = [int]$meta.h
+        cursor = @{ x = [int]$meta.cursor.x; y = [int]$meta.cursor.y; on = [bool]$meta.cursor.on }
+        monitors = $meta.monitors
+    }
+    if ([int]$meta.img_seq -eq $since -or -not (Test-Path -LiteralPath $FramePath)) {
+        $out.changed = $false
+        return $out
+    }
+    try {
+        $out.image = [Convert]::ToBase64String([System.IO.File]::ReadAllBytes($FramePath))
+        $out.changed = $true
+    } catch {
+        $out.changed = $false
+    }
+    return $out
 }
 
 # --------------------------------------------------------------------------- #
 # Répartition
 # --------------------------------------------------------------------------- #
 
+function Invoke-Bridge {
+    param($Request)
+    $action = [string]$Request.action
+    $arguments = if ($Request.PSObject.Properties['args']) { $Request.args } else { $null }
+
+    if ($SessionActions -contains $action) {
+        return Invoke-SessionAction -Action $action -Arguments $arguments
+    }
+    switch ($action) {
+        'Frame' { return Invoke-Frame $arguments }
+        'FsList' { return Invoke-FsList $arguments }
+        'FsRead' { return Invoke-FsRead $arguments }
+        'FsWrite' { return Invoke-FsWrite $arguments }
+        'FsDelete' { return Invoke-FsDelete $arguments }
+        'FsMkdir' { return Invoke-FsMkdir $arguments }
+        'FsRename' { return Invoke-FsRename $arguments }
+        'FsDownload' { return Invoke-FsDownload $arguments }
+        'FsStat' { return Invoke-FsStat $arguments }
+        'FsDownloadChunk' { return Invoke-FsDownloadChunk $arguments }
+        'FsWriteChunk' { return Invoke-FsWriteChunk $arguments }
+        'Drives' { return Invoke-Drives }
+        'Processes' { return Invoke-Processes }
+        'KillProcess' { return Invoke-KillProcess $arguments }
+        'Exec' { return Invoke-Exec $arguments }
+        'BridgeStatus' { return Invoke-BridgeStatus }
+        'ChannelInfo' { return Invoke-ChannelInfo }
+        default { return @{ ok = $false; error = "Action non autorisée : $action" } }
+    }
+}
+
+if ($Loop) {
+    # Canal persistant : une requête JSON par ligne, une réponse par ligne.
+    [Console]::Out.Write("READY`n")
+    [Console]::Out.Flush()
+    while ($null -ne ($line = [Console]::In.ReadLine())) {
+        if ([string]::IsNullOrWhiteSpace($line)) { continue }
+        try {
+            $request = $line | ConvertFrom-Json
+            $result = Invoke-Bridge $request
+        } catch {
+            $result = @{ ok = $false; error = $_.Exception.Message }
+        }
+        Write-Json $result
+    }
+    exit 0
+}
+
+# Mode one-shot (compatibilité / repli).
+if (-not $Payload) {
+    Write-Json @{ ok = $false; error = 'Payload manquant.' }
+    exit 2
+}
 try {
     $request = $Payload | ConvertFrom-Json
 } catch {
     Write-Json @{ ok = $false; error = 'Payload JSON invalide.' }
     exit 2
 }
-
-$action = [string]$request.action
-$arguments = if ($request.PSObject.Properties['args']) { $request.args } else { $null }
-
 try {
-    if ($SessionActions -contains $action) {
-        $result = Invoke-SessionAction -Action $action -Arguments $arguments
-        Write-Json $result
-        exit 0
-    }
-
-    switch ($action) {
-        'FsList' { Write-Json (Invoke-FsList $arguments) }
-        'FsRead' { Write-Json (Invoke-FsRead $arguments) }
-        'FsWrite' { Write-Json (Invoke-FsWrite $arguments) }
-        'FsDelete' { Write-Json (Invoke-FsDelete $arguments) }
-        'FsMkdir' { Write-Json (Invoke-FsMkdir $arguments) }
-        'FsRename' { Write-Json (Invoke-FsRename $arguments) }
-        'FsDownload' { Write-Json (Invoke-FsDownload $arguments) }
-        'Drives' { Write-Json (Invoke-Drives) }
-        'Processes' { Write-Json (Invoke-Processes) }
-        'KillProcess' { Write-Json (Invoke-KillProcess $arguments) }
-        'Exec' { Write-Json (Invoke-Exec $arguments) }
-        'BridgeStatus' { Write-Json (Invoke-BridgeStatus) }
-        default {
-            Write-Json @{ ok = $false; error = "Action non autorisée : $action" }
-            exit 2
-        }
-    }
+    Write-Json (Invoke-Bridge $request)
     exit 0
 } catch {
-    Write-Json @{ ok = $false; error = $_.Exception.Message; action = $action }
+    Write-Json @{ ok = $false; error = $_.Exception.Message; action = [string]$request.action }
     exit 1
 }

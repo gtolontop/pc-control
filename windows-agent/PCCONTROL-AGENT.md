@@ -39,9 +39,17 @@ Register-ScheduledTask -TaskName 'PCControl_SessionAgent' -Action $action `
 Start-ScheduledTask -TaskName 'PCControl_SessionAgent'
 ```
 
-`remote-ssh-dispatch.ps1` route désormais : verbes historiques vers
-`remote-control.ps1`, et le sentinel `Invoke` (payload JSON sur stdin) vers
-`pccontrol-bridge.ps1`.
+`remote-ssh-dispatch.ps1` route : verbes historiques vers `remote-control.ps1`,
+le canal `Run <base64>` et `Invoke` (stdin) vers `pccontrol-bridge.ps1`.
+
+## Canal direct LAN (vitesse)
+
+Pour éviter la lenteur du SSH sur cette tour, l'agent se connecte en **TCP direct**
+au Raspberry sur le réseau local (le Pi le lui demande via l'action `ConnectBack`).
+Toutes les actions bureau et les trames passent alors par ce socket persistant :
+~8 ms par entrée, ~26 img/s pour l'écran. Aucun port entrant n'est ouvert sur la
+tour ; c'est l'agent qui se connecte au Pi, avec un jeton dérivé de la clé Bearer.
+Voir `docs/ARCHITECTURE.md`.
 
 ## Vérification
 

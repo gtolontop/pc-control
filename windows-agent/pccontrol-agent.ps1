@@ -16,18 +16,25 @@ param([switch]$Once)
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 2.0
 
-$AgentVersion = 9
+$AgentVersion = 10
 $Root = 'C:\PCMode\bridge'
 $InBox = Join-Path $Root 'in'
 $OutBox = Join-Path $Root 'out'
 $Heartbeat = Join-Path $Root 'agent.json'
 $LogFile = Join-Path $Root 'agent.log'
+$ChannelInfoFile = Join-Path $Root 'channel.json'
+$ChannelPort = 47990   # boucle locale : le Raspberry s'y connecte via un tunnel SSH
 
 foreach ($folder in @($Root, $InBox, $OutBox)) {
     if (-not (Test-Path -LiteralPath $folder)) {
         New-Item -ItemType Directory -Path $folder -Force | Out-Null
     }
 }
+
+# Jeton partagé du canal TCP : n'importe quel processus de la tour peut atteindre
+# 127.0.0.1:47990, on exige donc un secret. Écrit dans channel.json, que le pont
+# transmet au Raspberry (action ChannelInfo).
+$ChannelToken = [guid]::NewGuid().ToString('N') + [guid]::NewGuid().ToString('N')
 
 function Write-AgentLog {
     param([string]$Message)
@@ -125,6 +132,18 @@ public static class PcInput
     public static void Wheel(int amount, bool horizontal)
     {
         Send(new INPUT[] { Mouse(horizontal ? MOUSEEVENTF_HWHEEL : MOUSEEVENTF_WHEEL, unchecked((uint)amount)) });
+    }
+
+    public static void ButtonDown(string button)
+    {
+        uint f = button == "right" ? MOUSEEVENTF_RIGHTDOWN : button == "middle" ? MOUSEEVENTF_MIDDLEDOWN : MOUSEEVENTF_LEFTDOWN;
+        Send(new INPUT[] { Mouse(f, 0) });
+    }
+
+    public static void ButtonUp(string button)
+    {
+        uint f = button == "right" ? MOUSEEVENTF_RIGHTUP : button == "middle" ? MOUSEEVENTF_MIDDLEUP : MOUSEEVENTF_LEFTUP;
+        Send(new INPUT[] { Mouse(f, 0) });
     }
 
     public static void TypeText(string text)
@@ -385,6 +404,34 @@ function Invoke-Pointer {
     return @{ ok = $true; message = 'Curseur déplacé.'; x = $x; y = $y }
 }
 
+function Invoke-Drag {
+    param($Arguments)
+    $bounds = Get-CaptureBounds (Get-ArgValue $Arguments 'monitor' -1)
+    $nx1 = [math]::Max(0.0, [math]::Min(1.0, [double](Get-ArgValue $Arguments 'nx' 0.5)))
+    $ny1 = [math]::Max(0.0, [math]::Min(1.0, [double](Get-ArgValue $Arguments 'ny' 0.5)))
+    $nx2 = [math]::Max(0.0, [math]::Min(1.0, [double](Get-ArgValue $Arguments 'nx2' 0.5)))
+    $ny2 = [math]::Max(0.0, [math]::Min(1.0, [double](Get-ArgValue $Arguments 'ny2' 0.5)))
+    $button = [string](Get-ArgValue $Arguments 'button' 'left')
+    if ($button -notin @('left', 'right', 'middle')) { $button = 'left' }
+    $x1 = [int]($bounds.X + ($nx1 * ($bounds.Width - 1)))
+    $y1 = [int]($bounds.Y + ($ny1 * ($bounds.Height - 1)))
+    $x2 = [int]($bounds.X + ($nx2 * ($bounds.Width - 1)))
+    $y2 = [int]($bounds.Y + ($ny2 * ($bounds.Height - 1)))
+    [void][PcInput]::SetCursorPos($x1, $y1)
+    Start-Sleep -Milliseconds 20
+    [PcInput]::ButtonDown($button)
+    $steps = 12
+    for ($i = 1; $i -le $steps; $i++) {
+        $x = [int]($x1 + (($x2 - $x1) * $i / $steps))
+        $y = [int]($y1 + (($y2 - $y1) * $i / $steps))
+        [void][PcInput]::SetCursorPos($x, $y)
+        Start-Sleep -Milliseconds 12
+    }
+    Start-Sleep -Milliseconds 20
+    [PcInput]::ButtonUp($button)
+    return @{ ok = $true; message = 'Glissé.' }
+}
+
 function Invoke-Scroll {
     param($Arguments)
     $amount = [int](Get-ArgValue $Arguments 'amount' -360)
@@ -550,8 +597,126 @@ function Get-SessionSnapshot {
         muted = $muted
         monitors = Get-Screens
         window = $foreground
-        apps = @(Get-AppCatalog | ForEach-Object { @{ id = $_.id; name = $_.name } })
+        apps = Get-AppSummary
     }
+}
+
+function Get-AppSummary {
+    $summary = New-Object System.Collections.ArrayList
+    foreach ($entry in Get-AppCatalog) {
+        [void]$summary.Add(@{ id = [string]$entry.id; name = [string]$entry.name })
+    }
+    return , $summary.ToArray()
+}
+
+$LiveDir = Join-Path $Root 'live'
+$StreamControl = Join-Path $LiveDir 'stream.json'
+$FramePath = Join-Path $LiveDir 'frame.jpg'
+$FrameMeta = Join-Path $LiveDir 'frame.json'
+$CaptureScript = Join-Path (Split-Path -Parent $PSCommandPath) 'pccontrol-capture.ps1'
+
+# Canal « connect-back » : le Raspberry, sur le même réseau local, demande à l'agent
+# de se connecter à lui en TCP direct (sans SSH). Toutes les actions bureau et les
+# trames passent alors par cette connexion persistante : latence ~réseau local,
+# aucun démarrage de processus par action.
+$script:CbHost = $null
+$script:CbPort = 0
+$script:CbToken = $null
+
+function Invoke-ConnectBack {
+    param($Arguments)
+    $script:CbHost = [string](Get-ArgValue $Arguments 'host' '')
+    $script:CbPort = [int](Get-ArgValue $Arguments 'port' 0)
+    $script:CbToken = [string](Get-ArgValue $Arguments 'token' '')
+    return @{ ok = $true; message = 'Canal direct configuré.' }
+}
+
+function Set-StreamAlive {
+    param($Arguments)
+    if (-not (Test-Path -LiteralPath $LiveDir)) { New-Item -ItemType Directory -Path $LiveDir -Force | Out-Null }
+    $control = @{}
+    if (Test-Path -LiteralPath $StreamControl) {
+        try {
+            $existing = Get-Content -LiteralPath $StreamControl -Raw -Encoding UTF8 | ConvertFrom-Json
+            foreach ($p in $existing.PSObject.Properties) { $control[$p.Name] = $p.Value }
+        } catch { }
+    }
+    foreach ($k in 'monitor', 'width', 'quality', 'fps') {
+        $v = Get-ArgValue $Arguments $k $null
+        if ($null -ne $v) { $control[$k] = $v }
+    }
+    $control['until'] = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() + 8
+    $tmp = "$StreamControl.tmp"
+    [System.IO.File]::WriteAllText($tmp, ($control | ConvertTo-Json -Compress), (New-Object System.Text.UTF8Encoding($false)))
+    Move-Item -LiteralPath $tmp -Destination $StreamControl -Force
+}
+
+function Test-CaptureDaemon {
+    return [bool](@(Get-Process -Name 'powershell' -ErrorAction SilentlyContinue)).Count -ge 0 -and (Test-Path -LiteralPath $FrameMeta)
+}
+
+# Trame courante : en-tête (séquence, curseur…) + octets JPEG bruts (aucun base64,
+# donc aucune signature antivirus « capture + base64 » dans ce processus).
+function Get-FrameResponse {
+    param($Arguments)
+    Set-StreamAlive $Arguments
+    if (-not (Test-Path -LiteralPath $FrameMeta)) {
+        Invoke-StreamStart $Arguments | Out-Null
+        return @{ header = @{ ok = $true; ready = $false }; bytes = $null }
+    }
+    $meta = $null
+    try { $meta = Get-Content -LiteralPath $FrameMeta -Raw -Encoding UTF8 | ConvertFrom-Json } catch { }
+    if (-not $meta) { return @{ header = @{ ok = $true; ready = $false }; bytes = $null } }
+
+    $since = [int](Get-ArgValue $Arguments 'since' -1)
+    $header = @{
+        ok = $true
+        ready = $true
+        img_seq = [int]$meta.img_seq
+        w = [int]$meta.w
+        h = [int]$meta.h
+        cursor = @{ x = [int]$meta.cursor.x; y = [int]$meta.cursor.y; on = [bool]$meta.cursor.on }
+        monitors = $meta.monitors
+        img_len = 0
+        changed = $false
+    }
+    if ([int]$meta.img_seq -ne $since -and (Test-Path -LiteralPath $FramePath)) {
+        try {
+            $bytes = [System.IO.File]::ReadAllBytes($FramePath)
+            $header.img_len = $bytes.Length
+            $header.changed = $true
+            return @{ header = $header; bytes = $bytes }
+        } catch { }
+    }
+    return @{ header = $header; bytes = $null }
+}
+
+function Invoke-StreamStart {
+    param($Arguments)
+    if (-not (Test-Path -LiteralPath $LiveDir)) { New-Item -ItemType Directory -Path $LiveDir -Force | Out-Null }
+    $control = @{
+        monitor = [int](Get-ArgValue $Arguments 'monitor' -1)
+        width = [int](Get-ArgValue $Arguments 'width' 1280)
+        quality = [int](Get-ArgValue $Arguments 'quality' 55)
+        fps = [int](Get-ArgValue $Arguments 'fps' 10)
+        until = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() + 8
+    }
+    $tmp = "$StreamControl.tmp"
+    [System.IO.File]::WriteAllText($tmp, ($control | ConvertTo-Json -Compress), (New-Object System.Text.UTF8Encoding($false)))
+    Move-Item -LiteralPath $tmp -Destination $StreamControl -Force
+    # Le mutex du daemon empêche les doublons : on peut relancer sans risque.
+    Start-Process -FilePath 'powershell.exe' `
+        -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File', $CaptureScript, '-Stream') `
+        -WindowStyle Hidden | Out-Null
+    return @{ ok = $true; message = 'Flux écran démarré.' }
+}
+
+function Invoke-StreamStop {
+    if (Test-Path -LiteralPath $StreamControl) {
+        $control = @{ until = 0 }
+        [System.IO.File]::WriteAllText($StreamControl, ($control | ConvertTo-Json -Compress), (New-Object System.Text.UTF8Encoding($false)))
+    }
+    return @{ ok = $true; message = 'Flux écran arrêté.' }
 }
 
 function Invoke-AgentAction {
@@ -560,8 +725,12 @@ function Invoke-AgentAction {
     switch ($Action) {
         'Screenshot' { return Invoke-Screenshot $Arguments }
         'ScreenInfo' { return @{ ok = $true; monitors = Get-Screens } }
+        'StreamStart' { return Invoke-StreamStart $Arguments }
+        'StreamStop' { return Invoke-StreamStop }
+        'ConnectBack' { return Invoke-ConnectBack $Arguments }
         'Click' { return Invoke-Pointer $Arguments 'click' }
         'MoveMouse' { return Invoke-Pointer $Arguments 'move' }
+        'Drag' { return Invoke-Drag $Arguments }
         'Scroll' { return Invoke-Scroll $Arguments }
         'TypeText' { return Invoke-TypeText $Arguments }
         'SendKey' { return Invoke-SendKey $Arguments }
@@ -651,12 +820,98 @@ function Step {
         Remove-Item -Force -ErrorAction SilentlyContinue
 }
 
+function Update-Heartbeat {
+    try {
+        $beat = @{
+            pid = $PID
+            version = $AgentVersion
+            at = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+            channel_port = $ChannelPort
+        } | ConvertTo-Json -Compress
+        [System.IO.File]::WriteAllText($Heartbeat, $beat, (New-Object System.Text.UTF8Encoding($false)))
+    } catch {
+    }
+}
+
+# Sert la connexion directe (connect-back) vers le Raspberry : une requête JSON par
+# ligne, une réponse par ligne, suivie — pour une trame — des octets JPEG bruts
+# (aucun base64). Reste ouverte : latence ~réseau local, zéro démarrage de processus.
+function Serve-ConnectBack {
+    $client = New-Object System.Net.Sockets.TcpClient
+    try {
+        $client.Connect($script:CbHost, $script:CbPort)
+    } catch {
+        try { $client.Close() } catch { }
+        Start-Sleep -Seconds 2
+        return
+    }
+    $client.NoDelay = $true
+    $client.ReceiveTimeout = 1000
+    $stream = $client.GetStream()
+    $reader = New-Object System.IO.StreamReader($stream, [System.Text.Encoding]::UTF8)
+    $encoding = New-Object System.Text.UTF8Encoding($false)
+    # Authentification : le jeton d'abord.
+    $hello = $encoding.GetBytes(($script:CbToken) + "`n")
+    $stream.Write($hello, 0, $hello.Length); $stream.Flush()
+    Write-AgentLog "Canal direct connecté à $($script:CbHost):$($script:CbPort)"
+
+    try {
+        while ($client.Connected) {
+            $line = $null
+            try {
+                $line = $reader.ReadLine()
+            } catch [System.IO.IOException] {
+                Update-Heartbeat
+                continue
+            }
+            if ($null -eq $line) { break }
+            if ([string]::IsNullOrWhiteSpace($line)) { continue }
+
+            $request = $null
+            try { $request = $line | ConvertFrom-Json } catch { continue }
+            $id = if ($request.PSObject.Properties['id']) { $request.id } else { 0 }
+            $action = [string]$request.action
+            $arguments = if ($request.PSObject.Properties['args']) { $request.args } else { $null }
+
+            try {
+                if ($action -eq 'Frame') {
+                    $frame = Get-FrameResponse $arguments
+                    $frame.header['id'] = $id
+                    $head = $encoding.GetBytes(($frame.header | ConvertTo-Json -Compress -Depth 6) + "`n")
+                    $stream.Write($head, 0, $head.Length)
+                    if ($frame.bytes) { $stream.Write($frame.bytes, 0, $frame.bytes.Length) }
+                    $stream.Flush()
+                } else {
+                    $result = Invoke-AgentAction -Action $action -Arguments $arguments
+                    if ($result -is [hashtable]) { $result['id'] = $id }
+                    $body = $encoding.GetBytes(($result | ConvertTo-Json -Compress -Depth 6) + "`n")
+                    $stream.Write($body, 0, $body.Length); $stream.Flush()
+                }
+            } catch {
+                $errObj = @{ id = $id; ok = $false; error = $_.Exception.Message; action = $action }
+                $body = $encoding.GetBytes(($errObj | ConvertTo-Json -Compress) + "`n")
+                try { $stream.Write($body, 0, $body.Length); $stream.Flush() } catch { break }
+            }
+        }
+    } catch {
+    } finally {
+        try { $client.Close() } catch { }
+        Write-AgentLog 'Canal direct fermé.'
+    }
+}
+
 Write-AgentLog "Agent démarré (version $AgentVersion, session $((Get-Process -Id $PID).SessionId))"
 
 if ($Once) {
     Step
     exit 0
 }
+
+# Un FileSystemWatcher réveille l'agent dès qu'une requête (repli dossier) arrive.
+$watcher = New-Object System.IO.FileSystemWatcher
+$watcher.Path = $InBox
+$watcher.Filter = '*.json'
+$watcher.NotifyFilter = [System.IO.NotifyFilters]::FileName -bor [System.IO.NotifyFilters]::LastWrite
 
 $lastBeat = [datetime]::MinValue
 while ($true) {
@@ -667,15 +922,15 @@ while ($true) {
     }
     if (((Get-Date) - $lastBeat).TotalSeconds -ge 2) {
         $lastBeat = Get-Date
-        try {
-            $beat = @{
-                pid = $PID
-                version = $AgentVersion
-                at = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
-            } | ConvertTo-Json -Compress
-            [System.IO.File]::WriteAllText($Heartbeat, $beat, (New-Object System.Text.UTF8Encoding($false)))
-        } catch {
-        }
+        Update-Heartbeat
     }
-    Start-Sleep -Milliseconds 120
+
+    # Si le Raspberry a demandé un canal direct, on s'y connecte et on le sert jusqu'à
+    # sa fermeture (puis on repart pour le drop-folder de repli + battement).
+    if ($script:CbHost -and $script:CbPort -gt 0) {
+        Serve-ConnectBack
+        continue
+    }
+
+    [void]$watcher.WaitForChanged([System.IO.WatcherChangeTypes]::Created, 300)
 }

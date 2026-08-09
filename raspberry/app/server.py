@@ -7,6 +7,8 @@ arbitraire : /api/control n'accepte que les actions listées dans CONTROL_ACTION
 et le pont Windows revérifie cette liste de son côté.
 """
 
+import base64
+import hashlib
 import hmac
 import json
 import os
@@ -53,8 +55,11 @@ RATE_MAX_REQUESTS = 30
 # Le pilotage direct (souris, écran, clavier) génère beaucoup plus de requêtes
 # légitimes qu'une simple lecture d'état : on lui accorde un quota bien plus large.
 RATE_MAX_CONTROL = 600
+# Le flux d'écran interroge souvent (jusqu'à ~15/s) ; quota dédié généreux.
+RATE_MAX_SCREEN = 1800
 ATTEMPTS = defaultdict(deque)
 CONTROL_ATTEMPTS = defaultdict(deque)
+SCREEN_ATTEMPTS = defaultdict(deque)
 STATUS_CONDITION = threading.Condition()
 LATEST_STATUS = None
 LATEST_STATUS_VERSION = 0
@@ -79,20 +84,30 @@ CONTROL_ACTIONS = {
 # rejeter au plus tôt tout nom d'action non prévu.
 RICH_ACTIONS = {
     # Bureau interactif (agent de session).
-    "Screenshot", "ScreenInfo", "Click", "MoveMouse", "Scroll", "TypeText", "SendKey",
-    "Volume", "Media", "Lock", "DisplaysOff", "DisplaysOn", "GetClipboard", "SetClipboard",
-    "WindowList", "FocusWindow", "CloseWindow", "Launch", "OpenPath", "OpenUrl", "Notify",
-    "SessionInfo", "LogOff",
+    "Screenshot", "ScreenInfo", "StreamStart", "StreamStop", "Click", "MoveMouse", "Drag",
+    "Scroll", "TypeText", "SendKey", "Volume", "Media", "Lock", "DisplaysOff", "DisplaysOn",
+    "GetClipboard", "SetClipboard", "WindowList", "FocusWindow", "CloseWindow", "Launch",
+    "OpenPath", "OpenUrl", "Notify", "SessionInfo", "LogOff",
     # Système (pont SSH).
-    "FsList", "FsRead", "FsWrite", "FsDelete", "FsMkdir", "FsRename", "FsDownload",
-    "Drives", "Processes", "KillProcess", "Exec", "BridgeStatus",
+    "Frame", "FsList", "FsRead", "FsWrite", "FsDelete", "FsMkdir", "FsRename", "FsDownload",
+    "FsStat", "FsDownloadChunk", "FsWriteChunk", "Drives", "Processes", "KillProcess",
+    "Exec", "BridgeStatus",
 }
 
-# Actions longues : capture, terminal, transferts de fichiers. Délai réseau plus large.
+# Lectures pures : ne polluent pas le journal d'audit.
+READ_ONLY_ACTIONS = {
+    "Screenshot", "ScreenInfo", "SessionInfo", "BridgeStatus", "WindowList", "Frame",
+    "FsList", "FsRead", "FsStat", "FsDownload", "FsDownloadChunk", "Drives", "Processes",
+    "GetClipboard", "MoveMouse", "StreamStart", "StreamStop",
+}
+
+# Actions longues : terminal, transferts de fichiers. Délai réseau plus large.
 RICH_TIMEOUTS = {
     "Screenshot": 45,
     "Exec": 130,
     "FsDownload": 60,
+    "FsDownloadChunk": 45,
+    "FsWriteChunk": 45,
     "FsWrite": 60,
 }
 
@@ -687,6 +702,17 @@ def rate_limited_control(address):
     return False
 
 
+def rate_limited_screen(address):
+    now = time.monotonic()
+    entries = SCREEN_ATTEMPTS[address]
+    while entries and now - entries[0] > RATE_WINDOW_SECONDS:
+        entries.popleft()
+    if len(entries) >= RATE_MAX_SCREEN:
+        return True
+    entries.append(now)
+    return False
+
+
 def resolve_pc_ip():
     try:
         return socket.gethostbyname(PC_HOST)
@@ -765,10 +791,10 @@ def decode_windows(raw):
 def ssh_base(connect_timeout=6):
     """Options SSH communes au pont Windows.
 
-    On n'utilise PAS le multiplexage ControlMaster : le pont lit son payload sur
-    l'entrée standard, or un canal SSH multiplexé ne transmet pas proprement le
-    stdin d'une commande forcée (il renvoie la sortie de la commande maîtresse).
-    Une poignée de main complète par action reste rapide sur le réseau local.
+    Pas de multiplexage ControlMaster : sur Win32-OpenSSH, des exécutions
+    concurrentes partageant un même maître voient leurs sorties se croiser. La
+    vitesse vient du canal TCP persistant (TunnelChannel) ; les commandes SSH
+    ponctuelles restent, elles, en connexion dédiée et fiable.
     """
     return [
         "/usr/bin/ssh",
@@ -801,7 +827,7 @@ def last_json(output):
 
 
 def pc_control(action):
-    """Exécute un verbe historique du pont Windows par SSH."""
+    """Exécute un verbe historique du pont Windows par SSH (multiplexé)."""
     command = ssh_base() + [f"{PC_USER}@{PC_HOST}", action]
     try:
         result = subprocess.run(command, capture_output=True, timeout=90, check=False)
@@ -825,11 +851,10 @@ def pc_control(action):
 
 
 def pc_invoke(action, args=None, timeout=60):
-    """Envoie une action riche { action, args } au pont via le canal `Invoke`.
+    """Envoie une action riche { action, args } au pont via le canal `Invoke` one-shot.
 
-    Le payload JSON transite par l'entrée standard SSH (aucune limite de longueur,
-    contrairement à la ligne de commande). La liste blanche réelle est appliquée
-    côté Windows par pccontrol-bridge.ps1.
+    Repli lorsque le canal persistant est indisponible. Le payload JSON transite par
+    l'entrée standard SSH ; la liste blanche réelle est appliquée côté Windows.
     """
     payload = json.dumps({"action": action, "args": args or {}}, ensure_ascii=False)
     command = ssh_base() + [f"{PC_USER}@{PC_HOST}", "Invoke"]
@@ -853,6 +878,175 @@ def pc_invoke(action, args=None, timeout=60):
         raise RuntimeError(detail or "Le pont Windows n'est pas joignable.")
     if not isinstance(parsed, dict):
         raise RuntimeError("Réponse illisible du pont Windows.")
+    return parsed
+
+
+AGENT_LISTEN_PORT = int(os.environ.get("REMOTE_WAKE_AGENT_PORT", "8790"))
+
+# Actions servies par l'agent de session via le canal direct (bureau + trames).
+# Les actions système (fichiers, processus, terminal) passent par le canal `Run`.
+CHANNEL_ACTIONS = {
+    "Frame", "Screenshot", "ScreenInfo", "StreamStart", "StreamStop", "Click", "MoveMouse",
+    "Drag", "Scroll", "TypeText", "SendKey", "Volume", "Media", "Lock", "DisplaysOff",
+    "DisplaysOn", "GetClipboard", "SetClipboard", "WindowList", "FocusWindow", "CloseWindow",
+    "Launch", "OpenPath", "OpenUrl", "Notify", "SessionInfo", "LogOff",
+}
+
+
+class LanAgentChannel:
+    """Canal TCP direct sur le réseau local vers l'agent de session.
+
+    Toute forme de tunnel SSH vers l'agent s'est révélée soit cassée soit lente sur
+    le Win32-OpenSSH de la tour (multiplexage qui croise les sorties, stdin partiel,
+    forward ~2 s). On inverse donc le sens : le Raspberry écoute un port sur le LAN,
+    et demande à l'agent (via une commande `Run` ponctuelle) de s'y connecter en TCP
+    direct. Une fois la connexion établie, toutes les actions bureau et les trames
+    passent par ce socket réutilisé, sans SSH ni démarrage de processus : latence
+    ~réseau local (quelques millisecondes).
+    """
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.conn = None
+        self.reader = None
+        self.seq = 0
+        # Jeton STABLE (dérivé de la clé Bearer) : un redémarrage du service ne le
+        # change pas, donc l'agent déjà connecté reste valide et se reconnecte seul.
+        # La clé brute ne transite jamais sur le LAN (seulement ce condensé).
+        self.token = hashlib.sha256((TOKEN + "|pc-control-lan").encode()).hexdigest()
+        self.pi_ip = None
+        try:
+            threading.Thread(target=self._listen_loop, name="lan-agent-listen", daemon=True).start()
+            threading.Thread(target=self._maintain_loop, name="lan-agent-maintain", daemon=True).start()
+        except RuntimeError:
+            pass
+
+    def _lan_ip(self):
+        try:
+            probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            probe.connect((resolve_pc_ip(), 9))
+            ip = probe.getsockname()[0]
+            probe.close()
+            return ip
+        except OSError:
+            return PC_IP
+
+    def _listen_loop(self):
+        server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            server.bind(("0.0.0.0", AGENT_LISTEN_PORT))
+            server.listen(1)
+        except OSError as error:
+            print(f"lan-agent: bind impossible: {error}", flush=True)
+            return
+        while True:
+            try:
+                client, _ = server.accept()
+                client.settimeout(8)
+                reader = client.makefile("rb")
+                hello = reader.readline()
+                if hello.decode("utf-8", "replace").strip() != self.token:
+                    client.close()
+                    continue
+                client.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+                client.settimeout(20)
+                with self.lock:
+                    self._drop()
+                    self.conn = client
+                    self.reader = reader
+                print("lan-agent: agent connecté", flush=True)
+            except OSError:
+                time.sleep(0.5)
+
+    def _maintain_loop(self):
+        # Tant qu'aucun agent n'est connecté, on lui demande (via SSH ponctuel) de se
+        # connecter en retour. Uniquement quand la tour est en ligne.
+        while True:
+            if self.conn is None and (LATEST_STATUS is None or LATEST_STATUS.get("online")):
+                if self.pi_ip is None:
+                    self.pi_ip = self._lan_ip()
+                try:
+                    pc_action(
+                        "ConnectBack",
+                        {"host": self.pi_ip, "port": AGENT_LISTEN_PORT, "token": self.token},
+                        timeout=20,
+                    )
+                except RuntimeError:
+                    pass
+            time.sleep(6)
+
+    def _drop(self):
+        for closable in (self.reader, self.conn):
+            try:
+                if closable:
+                    closable.close()
+            except OSError:
+                pass
+        self.reader = None
+        self.conn = None
+
+    def request(self, action, args=None, timeout=20):
+        """Renvoie (header_dict, image_bytes). image_bytes est vide hors trame."""
+        with self.lock:
+            if self.conn is None:
+                raise RuntimeError("Agent non connecté.")
+            try:
+                self.seq += 1
+                self.conn.settimeout(timeout)
+                payload = json.dumps(
+                    {"id": self.seq, "action": action, "args": args or {}}, ensure_ascii=False
+                ).encode("utf-8") + b"\n"
+                self.conn.sendall(payload)
+                header_line = self.reader.readline()
+                if not header_line:
+                    raise RuntimeError("Canal fermé.")
+                header = json.loads(header_line.decode("utf-8", "replace"))
+                length = int(header.get("img_len", 0) or 0)
+                data = b""
+                while len(data) < length:
+                    chunk = self.reader.read(length - len(data))
+                    if not chunk:
+                        raise RuntimeError("Trame tronquée.")
+                    data += chunk
+                return header, data
+            except (OSError, ValueError, RuntimeError) as error:
+                self._drop()
+                raise RuntimeError(str(error) or "Canal indisponible.")
+
+
+CHANNEL = LanAgentChannel()
+
+
+def pc_channel(action, args=None, timeout=20):
+    return CHANNEL.request(action, args, timeout=timeout)
+
+
+def pc_action(action, args=None, timeout=45):
+    """Action riche via le canal rapide `Run` (multiplexé, payload en argument).
+
+    Le multiplexage supprime la poignée de main SSH ; le payload JSON voyage encodé
+    en base64 dans la ligne de commande (pas de stdin, donc compatible ControlMaster).
+    Les payloads volumineux (transferts de fichiers) repassent par `Invoke` (stdin).
+    Plusieurs appels concurrents ouvrent chacun un canal multiplexé : le client peut
+    donc pipeliner les trames pour un débit supérieur.
+    """
+    payload = json.dumps({"action": action, "args": args or {}}, ensure_ascii=False)
+    encoded = base64.b64encode(payload.encode("utf-8")).decode("ascii")
+    if len(encoded) > 8000:
+        return pc_invoke(action, args, timeout=timeout)
+
+    command = ssh_base() + [f"{PC_USER}@{PC_HOST}", "Run " + encoded]
+    try:
+        result = subprocess.run(command, capture_output=True, timeout=timeout, check=False)
+    except subprocess.TimeoutExpired as error:
+        raise RuntimeError("La tour ne répond pas à temps.") from error
+
+    parsed = last_json(decode_windows(result.stdout).strip())
+    if not isinstance(parsed, dict):
+        errors = decode_windows(result.stderr).strip()
+        detail = errors.splitlines()[-1] if errors else ""
+        raise RuntimeError(detail or "Le pont Windows n'est pas joignable.")
     return parsed
 
 
@@ -1274,6 +1468,10 @@ class Handler(BaseHTTPRequestHandler):
             self.stream_events()
             return
 
+        if path == "/api/screen":
+            self.handle_screen(query)
+            return
+
         if path == "/api/history":
             if not self.guard_api():
                 return
@@ -1342,27 +1540,28 @@ class Handler(BaseHTTPRequestHandler):
             return
         args = payload.get("args") if isinstance(payload.get("args"), dict) else {}
 
-        # Ces actions ont besoin que la tour soit joignable ; on évite un aller-retour
-        # SSH voué à expirer si elle est éteinte.
-        if not is_online():
+        # Gate rapide via l'état de fond (aucun arping par action : la latence doit
+        # rester minimale pour le pilotage). Le canal SSH détecte lui-même une tour
+        # éteinte en échouant vite.
+        if LATEST_STATUS and not LATEST_STATUS.get("online"):
             self.send_json(409, {"online": False, "error": "La tour est éteinte, allume-la d'abord."})
             return
 
         started = time.monotonic()
         timeout = RICH_TIMEOUTS.get(action, 30)
         try:
-            result = pc_invoke(action, args, timeout=timeout)
+            if action in CHANNEL_ACTIONS:
+                try:
+                    result, _ = pc_channel(action, args, timeout=timeout)
+                except RuntimeError:
+                    result = pc_action(action, args, timeout=timeout)
+            else:
+                result = pc_action(action, args, timeout=timeout)
         except RuntimeError as error:
             self.send_json(503, {"online": True, "ok": False, "error": str(error)})
             return
 
-        # Les actions qui modifient l'état de la tour sont tracées dans l'audit partagé ;
-        # les lectures pures (capture, listing, statut) ne polluent pas le journal.
-        if action not in (
-            "Screenshot", "ScreenInfo", "SessionInfo", "BridgeStatus", "WindowList",
-            "FsList", "FsRead", "FsDownload", "Drives", "Processes", "GetClipboard",
-            "MoveMouse",
-        ):
+        if action not in READ_ONLY_ACTIONS:
             record_audit(
                 action,
                 result.get("ok", True),
@@ -1371,6 +1570,42 @@ class Handler(BaseHTTPRequestHandler):
             )
 
         self.send_json(200 if result.get("ok", True) else 500, {"online": True, **result})
+
+    def handle_screen(self, query):
+        """Trame d'écran (canal persistant). Renvoie l'image seulement si elle a changé."""
+        if rate_limited_screen(self.client_address[0]):
+            self.send_json(429, {"error": "Trop de trames."})
+            return
+        if not authorized(self.headers.get("Authorization")):
+            self.send_json(401, {"error": "Clé incorrecte"})
+            return
+        if LATEST_STATUS and not LATEST_STATUS.get("online"):
+            self.send_json(409, {"online": False, "error": "La tour est éteinte."})
+            return
+
+        def as_int(name, default):
+            try:
+                return int(query.get(name, [str(default)])[0])
+            except (ValueError, TypeError):
+                return default
+
+        args = {
+            "since": as_int("since", -1),
+            "monitor": as_int("monitor", -1),
+            "width": as_int("width", 1280),
+            "fps": as_int("fps", 12),
+        }
+        try:
+            header, image = pc_channel("Frame", args, timeout=15)
+        except RuntimeError as error:
+            self.send_json(503, {"ok": False, "error": str(error)})
+            return
+        # Le canal renvoie les octets JPEG bruts (efficace) ; base64 seulement pour le
+        # lien téléphone, et image omise si la trame n'a pas changé.
+        payload = {k: v for k, v in header.items() if k not in ("img_len", "id")}
+        if image:
+            payload["image"] = base64.b64encode(image).decode("ascii")
+        self.send_json(200, payload)
 
     def do_POST(self):
         path = self.path.split("?", 1)[0]

@@ -4,7 +4,22 @@ Les changements notables de PC Control seront documentés dans ce fichier.
 
 ## Unreleased
 
+### Performance
+
+- canal direct TCP sur le LAN (connect-back de l'agent vers le Raspberry) : latence
+  d'entrée ~8 ms et flux d'écran ~26 img/s, contre ~0,5-2 s auparavant ;
+- daemon de capture permanent avec déduplication d'images et curseur séparé dessiné
+  côté client : bande passante quasi nulle sur un écran statique ;
+- reconnexion automatique du canal, repli SSH ponctuel tant qu'il n'est pas établi.
+
 ### Added
+
+- interface v11 refondue : plus fluide, micro-animations, streaming d'écran continu ;
+- écran distant : glisser-déposer (drag), molette au doigt, plein écran, clavier live,
+  « coller » du presse-papiers du téléphone vers le PC ;
+- fichiers : transferts par morceaux sans limite de taille avec barre de progression,
+  aperçu image, tri, renommage ;
+- transferts de fichiers volumineux via FsDownloadChunk / FsWriteChunk.
 
 - refonte complète de l'interface PWA : sobre, mobile-first, barre d'onglets
   (Accueil, Écran, Fichiers, Système, Terminal) ;
