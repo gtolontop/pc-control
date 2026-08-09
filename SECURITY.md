@@ -27,4 +27,3 @@ d'issue publique et sans inclure de secret dans une capture ou un journal.
 2. Vérifier les journaux Cloudflare, Raspberry et Windows.
 3. Nettoyer l'historique Git si nécessaire.
 4. Ajouter une règle de prévention avant toute nouvelle publication.
-

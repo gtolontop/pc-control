@@ -13,4 +13,3 @@ Les changements notables de PC Control seront documentés dans ce fichier.
 - exemples de configuration sans secrets ;
 - documentation d'architecture et règles de sécurité ;
 - validation statique Python et PowerShell.
-

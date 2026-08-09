@@ -31,4 +31,3 @@ automatiquement à la tour Windows, au Raspberry Pi ou au tunnel Cloudflare.
 
 Un déploiement est une opération distincte du développement. Il nécessite une demande
 explicite, une sauvegarde datée, une validation locale et une procédure de retour arrière.
-
