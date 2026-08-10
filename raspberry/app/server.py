@@ -1448,6 +1448,7 @@ class Handler(BaseHTTPRequestHandler):
         args = {
             "monitor": as_int("monitor", -1),
             "width": as_int("width", 1280),
+            "quality": as_int("quality", 45),
             "fps": as_int("fps", 30),
         }
         since = -1
@@ -1695,6 +1696,7 @@ class Handler(BaseHTTPRequestHandler):
             "since": as_int("since", -1),
             "monitor": as_int("monitor", -1),
             "width": as_int("width", 1280),
+            "quality": as_int("quality", 45),
             "fps": as_int("fps", 12),
         }
         try:

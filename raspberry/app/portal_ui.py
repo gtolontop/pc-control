@@ -122,6 +122,7 @@ button:disabled{opacity:.35;cursor:not-allowed}
 .livebadge{position:absolute;top:var(--s2);left:var(--s2);z-index:6;display:flex;align-items:center;gap:6px;height:22px;padding:0 9px;border-radius:999px;background:rgba(0,0,0,.6);backdrop-filter:blur(6px);color:#fff;font-size:9.5px;font-weight:600;letter-spacing:.09em}
 .livebadge i{display:block;width:6px;height:6px;border-radius:50%;background:var(--ok);animation:pulse 1.4s infinite}
 @keyframes pulse{50%{opacity:.25}}
+.nethud{position:absolute;bottom:var(--s2);right:var(--s2);z-index:6;height:20px;padding:0 8px;display:flex;align-items:center;border-radius:999px;background:rgba(0,0,0,.55);backdrop-filter:blur(6px);color:#c9c9cf;font-size:9px;font-family:ui-monospace,monospace}
 .fps{position:absolute;top:var(--s2);right:var(--s2);z-index:6;height:22px;padding:0 8px;display:flex;align-items:center;border-radius:999px;background:rgba(0,0,0,.55);backdrop-filter:blur(6px);color:#c9c9cf;font-size:9.5px}
 .keys{display:grid;grid-template-columns:repeat(6,1fr);gap:var(--s2)}
 .keys button{min-height:44px;border:1px solid var(--line);border-radius:var(--rs);background:var(--bg);color:var(--text);font-size:13px;transition:transform .09s,background .15s,border-color .15s}
@@ -357,11 +358,33 @@ function renderHome(d){const pc=d.pc||{},on=!!d.online,ready=!!d.control_ready;
 /* ===== Screen streaming ===== */
 function screenWidth(){if(scr.forceW)return scr.forceW;const w=$("#screenWrap").clientWidth||720;return clamp(Math.round(w*Math.min(2,window.devicePixelRatio||1)),640,1920)}
 function startScreen(){if(scr.on)return;scr.on=true;scr.seq=-1;scr.frames=0;scr.fpsT=performance.now();$("#liveBadge").hidden=false;
-  act("StreamStart",{monitor:scr.mon,width:screenWidth(),fps:30},true).catch(()=>{});wsFail=0;openStream();}
+  const L0=ladder();act("StreamStart",{monitor:scr.mon,width:scr.forceW||L0.w,quality:L0.q,fps:30},true).catch(()=>{});wsFail=0;openStream();}
 function stopScreen(){scr.on=false;closeStream();cancelAnimationFrame(scr.raf);scr.raf=0;$("#liveBadge")&&($("#liveBadge").hidden=true);if(data?.online)act("StreamStop",null,true).catch(()=>{})}
 // Flux poussé en WebSocket : une seule connexion, trames binaires brutes.
 // Repli automatique sur l'interrogation HTTP si le WebSocket échoue.
 let ws=null,wsFail=0,cv=null,cvCtx=null;
+// Échelle adaptative : on descend en résolution/qualité quand la liaison sature,
+// on remonte quand elle respire. C'est le principal levier de latence sur un
+// réseau lent : une image de 28 Ko passe là où une de 85 Ko fait du retard.
+const LADDER=[{w:1600,q:60},{w:1280,q:50},{w:1024,q:45},{w:800,q:38},{w:640,q:32},{w:480,q:28}];
+let rung=2,netBytes=0,netFrames=0,netT=performance.now(),netKbps=0,lastFrameAt=0,frameGap=0;
+function ladder(){return LADDER[clamp(rung,0,LADDER.length-1)]}
+function adapt(){
+  const now=performance.now(),dt=(now-netT)/1000;
+  if(dt<2)return;
+  netKbps=Math.round(netBytes*8/dt/1000);
+  const fps=netFrames/dt;
+  const before=rung;
+  // Trop lent : on descend d'un cran. Confortable : on remonte prudemment.
+  if(typeof autoQ==='undefined'||autoQ){
+    if(frameGap>320||(netFrames>2&&fps<6))rung=Math.min(LADDER.length-1,rung+1);
+    else if(frameGap<130&&fps>14)rung=Math.max(0,rung-1);
+  }
+  netBytes=0;netFrames=0;netT=now;
+  if(rung!==before&&scr.on){reopenStream()}
+  const hud=$("#netHud");
+  if(hud)hud.textContent=`${netKbps} kb/s · ${ladder().w}p · q${ladder().q}`;
+}
 function paintFrame(bitmap){
   if(!cv){cv=$("#screenCv");cvCtx=cv.getContext("2d",{alpha:false,desynchronized:true})}
   if(cv.width!==bitmap.width||cv.height!==bitmap.height){cv.width=bitmap.width;cv.height=bitmap.height}
@@ -373,7 +396,7 @@ function tickFps(){scr.frames++;const now=performance.now();
 function openStream(){
   if(ws)return;
   const proto=location.protocol==="https:"?"wss":"ws";
-  const url=proto+"://"+location.host+"/api/stream?k="+encodeURIComponent(key)+"&width="+screenWidth()+"&monitor="+scr.mon+"&fps=30";
+  const L=ladder();const url=proto+"://"+location.host+"/api/stream?k="+encodeURIComponent(key)+"&width="+(scr.forceW||L.w)+"&quality="+L.q+"&monitor="+scr.mon+"&fps=30";
   let sock;try{sock=new WebSocket(url)}catch(e){startPolling();return}
   sock.binaryType="arraybuffer";ws=sock;
   sock.onmessage=async ev=>{
@@ -383,18 +406,25 @@ function openStream(){
     const jpeg=new Uint8Array(ev.data,4+jlen);
     if(meta.cursor)placeCursor(meta.cursor,meta.w,meta.h);
     if(Array.isArray(meta.monitors)&&meta.monitors.length!==scr.monitors.length){scr.monitors=meta.monitors;renderMonitors()}
-    if(jpeg.length){try{paintFrame(await createImageBitmap(new Blob([jpeg],{type:"image/jpeg"})));tickFps()}catch(e){}}
+    if(jpeg.length){
+      const now=performance.now();
+      if(lastFrameAt)frameGap=frameGap?frameGap*0.7+(now-lastFrameAt)*0.3:(now-lastFrameAt);
+      lastFrameAt=now;netBytes+=ev.data.byteLength;netFrames++;
+      try{paintFrame(await createImageBitmap(new Blob([jpeg],{type:"image/jpeg"})));tickFps()}catch(e){}
+      adapt();
+    }
   };
   sock.onerror=()=>{};
   sock.onclose=()=>{ws=null;if(scr.on&&tab==="screen"){wsFail++;if(wsFail>=3)startPolling();else setTimeout(openStream,400)}};
 }
-function closeStream(){if(ws){try{ws.close()}catch(e){}ws=null}}
+function closeStream(){if(ws){const old=ws;ws=null;try{old.onclose=null;old.close()}catch(e){}}}
+function reopenStream(){closeStream();if(scr.on&&tab==="screen")openStream()}
 // Repli : ancienne boucle d'interrogation HTTP
 async function loopScreen(){
   if(!scr.on||tab!=="screen"||ws){return}
   if(!scr.inflight){scr.inflight=true;
     try{
-      const r=await api(`/api/screen?since=${scr.seq}&width=${screenWidth()}&monitor=${scr.mon}&fps=30`);
+      const L=ladder();const r=await api(`/api/screen?since=${scr.seq}&width=${scr.forceW||L.w}&quality=${L.q}&monitor=${scr.mon}&fps=30`);
       if(r.ready===false){$("#screenPh").textContent="Démarrage du flux…"}
       else{
         if(r.image){const img=$("#screenImg");img.src="data:image/jpeg;base64,"+r.image;img.hidden=false;$("#screenCv").hidden=true;$("#screenPh").hidden=true;scr.seq=r.img_seq;}
@@ -613,9 +643,16 @@ function stopRec(){if(!rec)return;try{rec.requestData()}catch{}try{rec.stop()}ca
   $("#recBtn").classList.remove("armed");$("#recBtn").textContent="⏺ Enregistrer";vibe(15)}
 $("#recBtn").addEventListener("click",()=>rec?stopRec():startRec());
 // Qualité : auto (résolution écran) / haute / basse
-const QUAL=[["auto",null],["haute",1600],["basse",720]];let qualIdx=0;
-$("#qualityBtn").addEventListener("click",()=>{qualIdx=(qualIdx+1)%QUAL.length;scr.forceW=QUAL[qualIdx][1];scr.seq=-1;
-  $("#qualityBtn").textContent="Qualité: "+QUAL[qualIdx][0];vibe()});
+let autoQ=true;
+$("#qualityBtn").addEventListener("click",()=>{
+  vibe();
+  if(autoQ){autoQ=false;rung=0}          // auto -> max
+  else if(rung===0){rung=2}              // max -> équilibré
+  else if(rung===2){rung=5}              // équilibré -> économe
+  else {autoQ=true;rung=2}               // économe -> auto
+  scr.forceW=null;scr.seq=-1;
+  $("#qualityBtn").textContent="Qualité: "+(autoQ?"auto":rung===0?"max":rung===2?"équilibré":"économe");
+  if(scr.on)reopenStream()});
 $("#keyText").addEventListener("keydown",e=>{
   const special={Enter:"enter",Backspace:"backspace",Tab:"tab",Escape:"escape",ArrowUp:"up",ArrowDown:"down",ArrowLeft:"left",ArrowRight:"right",Delete:"delete"};
   if(special[e.key]){e.preventDefault();const mods=[];if(e.ctrlKey)mods.push("ctrl");if(e.altKey)mods.push("alt");if(e.shiftKey)mods.push("shift");act("SendKey",{key:special[e.key],modifiers:mods},true).catch(()=>{})}
@@ -741,7 +778,7 @@ BODY = r"""
       <img id="screenImg" hidden alt="Écran"><canvas id="screenCv" hidden></canvas>
       <div class="rcursor hide" id="rcursor"></div>
       <div class="livebadge" id="liveBadge" hidden><i></i>LIVE</div>
-      <div class="fps" id="fps">— fps</div>
+      <div class="fps" id="fps">— fps</div><div class="nethud" id="netHud">—</div>
       <div class="ph" id="screenPh">Connexion…</div>
     </div></div></div>
     <div class="seg" style="grid-template-columns:1fr 1fr 1fr"><button data-click="left" class="active">Clic</button><button data-click="right">Droit</button><button data-click="double">Double</button></div>

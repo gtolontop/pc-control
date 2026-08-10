@@ -733,7 +733,7 @@ function Invoke-StreamStart {
     $control = @{
         monitor = [int](Get-ArgValue $Arguments 'monitor' -1)
         width = [int](Get-ArgValue $Arguments 'width' 1280)
-        quality = [int](Get-ArgValue $Arguments 'quality' 55)
+        quality = [int](Get-ArgValue $Arguments 'quality' 45)
         fps = [int](Get-ArgValue $Arguments 'fps' 10)
         until = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() + 8
     }

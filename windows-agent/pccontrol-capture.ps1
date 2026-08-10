@@ -24,8 +24,19 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+# GetHbitmap alloue une ressource GDI qu'il faut libérer à chaque trame, sinon la
+# capture continue fuit jusqu'à épuiser le quota d'objets GDI du processus.
+Add-Type -Namespace '' -Name PcGdi -MemberDefinition @'
+[DllImport("gdi32.dll")] public static extern bool DeleteObject(IntPtr hObject);
+'@
+
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
+# Encodeur JPEG de WPF : il expose un vrai réglage de qualité, contrairement à
+# System.Drawing.Imaging.EncoderParameters dont la combinaison avec une capture
+# d'écran correspond à une signature antivirus connue.
+Add-Type -AssemblyName PresentationCore
+Add-Type -AssemblyName WindowsBase
 
 function Get-CaptureBounds {
     param([int]$Index)
@@ -48,7 +59,7 @@ function Get-MonitorList {
 
 # Capture un écran et renvoie les octets JPEG + dimensions, sans curseur incrusté.
 function Get-FrameBytes {
-    param([int]$Mon, [int]$OutWidth)
+    param([int]$Mon, [int]$OutWidth, [int]$Quality = 55)
     $bounds = Get-CaptureBounds $Mon
     $bitmap = New-Object System.Drawing.Bitmap($bounds.Width, $bounds.Height)
     $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
@@ -67,10 +78,21 @@ function Get-FrameBytes {
         $bitmap = $resized
     }
 
-    # JPEG qualité GDI+ par défaut : le réglage fin via EncoderParameters est
-    # signé antivirus. On maîtrise le poids par la résolution.
+    # Encodage JPEG avec qualité réglable (WPF) : c'est le principal levier de
+    # poids par image, donc de latence sur une liaison lente.
     $ms = New-Object System.IO.MemoryStream
-    $bitmap.Save($ms, [System.Drawing.Imaging.ImageFormat]::Jpeg)
+    $hbitmap = $bitmap.GetHbitmap()
+    try {
+        $source = [System.Windows.Interop.Imaging]::CreateBitmapSourceFromHBitmap(
+            $hbitmap, [IntPtr]::Zero, [System.Windows.Int32Rect]::Empty,
+            [System.Windows.Media.Imaging.BitmapSizeOptions]::FromEmptyOptions())
+        $encoder = New-Object System.Windows.Media.Imaging.JpegBitmapEncoder
+        $encoder.QualityLevel = $Quality
+        $encoder.Frames.Add([System.Windows.Media.Imaging.BitmapFrame]::Create($source))
+        $encoder.Save($ms)
+    } finally {
+        [void][PcGdi]::DeleteObject($hbitmap)
+    }
     $bytes = $ms.ToArray()
     $ms.Dispose()
     $iw = $bitmap.Width
@@ -84,7 +106,7 @@ function Get-FrameBytes {
 # --------------------------------------------------------------------------- #
 if (-not $Stream) {
     if (-not $OutPath) { throw 'OutPath requis en mode one-shot.' }
-    $frame = Get-FrameBytes -Mon $Monitor -OutWidth $Width
+    $frame = Get-FrameBytes -Mon $Monitor -OutWidth $Width -Quality $Quality
     $tmp = "$OutPath.tmp"
     [System.IO.File]::WriteAllBytes($tmp, $frame.bytes)
     Move-Item -LiteralPath $tmp -Destination $OutPath -Force
@@ -122,11 +144,13 @@ while ($true) {
     $mon = if ($cfg.PSObject.Properties['monitor']) { [int]$cfg.monitor } else { -1 }
     $w = if ($cfg.PSObject.Properties['width']) { [int]$cfg.width } else { 1280 }
     $w = [math]::Max(320, [math]::Min(2560, $w))
+    $q = if ($cfg.PSObject.Properties['quality']) { [int]$cfg.quality } else { 50 }
+    $q = [math]::Max(15, [math]::Min(92, $q))
     $fps = if ($cfg.PSObject.Properties['fps']) { [int]$cfg.fps } else { 15 }
     $fps = [math]::Max(2, [math]::Min(40, $fps))
 
     try {
-        $frame = Get-FrameBytes -Mon $mon -OutWidth $w
+        $frame = Get-FrameBytes -Mon $mon -OutWidth $w -Quality $q
     } catch {
         Start-Sleep -Milliseconds 200
         continue
