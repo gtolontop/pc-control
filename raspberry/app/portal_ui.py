@@ -263,6 +263,37 @@ dialog::backdrop{background:rgba(0,0,0,.72);backdrop-filter:blur(4px)}
   .app{padding-inline:var(--s4)}
   .apps{grid-template-columns:repeat(6,1fr)}
 }
+
+/* ---------- Bureau : navigation latérale, contenu large ---------- */
+@media(min-width:940px){
+  .app{width:min(100%,1500px);padding-left:calc(210px + var(--s5));padding-right:var(--s5);padding-bottom:var(--s6)}
+  .nav{inset:0 auto 0 0;width:200px;height:100dvh;grid-template-columns:1fr;grid-auto-rows:max-content;
+       align-content:start;gap:2px;padding:var(--s4) var(--s3);border-top:0;border-right:1px solid var(--line)}
+  .nav::before{content:"PC Control";display:block;padding:0 var(--s3) var(--s4);color:var(--faint);font-size:11px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+  .nav button{flex-direction:row;justify-content:flex-start;gap:var(--s3);height:44px;padding:0 var(--s3);border-radius:var(--rs);font-size:13px;font-weight:550}
+  .nav button .ni{font-size:16px;width:20px;text-align:center}
+  .nav button.active{background:var(--raised)}
+  .nav button:hover{color:var(--text);background:var(--raised)}
+  .top{height:64px}
+  .toast,.prog{left:calc(50% + 105px);bottom:var(--s5)}
+  /* L'écran distant occupe la hauteur utile, c'est la vue principale sur PC. */
+  .screen-wrap{aspect-ratio:auto;height:calc(100dvh - 300px);min-height:420px}
+  .screen-wrap img,.screen-wrap canvas{object-fit:contain;background:#000}
+  .view{gap:var(--s4)}
+  .row.desk3{grid-template-columns:repeat(3,minmax(0,1fr))}
+}
+
+/* ---------- Sélecteur d'écrans ---------- */
+.mons{display:flex;gap:var(--s2);flex-wrap:wrap}
+.mon{display:flex;flex-direction:column;align-items:flex-start;gap:3px;min-width:104px;padding:9px 12px;
+     border:1px solid var(--line);border-radius:var(--ri);background:var(--bg);color:var(--dim);
+     font-size:11px;transition:border-color .15s,background .15s,color .15s}
+.mon:hover{border-color:var(--edge);color:var(--text)}
+.mon.active{border-color:var(--text);background:var(--raised);color:var(--text)}
+.mon b{font-size:12.5px;font-weight:650}
+.mon span{font-size:10px;color:var(--faint);font-family:ui-monospace,monospace}
+.mon.active span{color:var(--dim)}
+.kbcap{border-color:var(--accent)!important;color:var(--accent)!important}
 @media(prefers-reduced-motion:reduce){*{animation-duration:.01ms!important;transition-duration:.01ms!important}}
 """
 
@@ -442,9 +473,27 @@ function startPolling(){closeStream();if(!scr.raf)loopScreen()}
 function placeCursor(c,w,h){const cur=$("#rcursor"),img=surface();if(!w||!h||img.hidden){cur.classList.add("hide");return}
   const rect=img.getBoundingClientRect();const x=c.x/w*rect.width,y=c.y/h*rect.height;
   cur.classList.toggle("hide",!c.on);cur.style.transform=`translate(${x}px,${y}px)`;}
-function renderMonitors(){const box=$("#monitorSel");box.innerHTML="";if(scr.monitors.length<=1){box.hidden=true;return}box.hidden=false;
-  const mk=(l,i)=>{const b=document.createElement("button");b.textContent=l;b.className=scr.mon===i?"active":"";b.onclick=()=>{scr.mon=i;scr.seq=-1;renderMonitors()};return b};
-  box.appendChild(mk("Tous",-1));scr.monitors.forEach((m,i)=>box.appendChild(mk("É"+(i+1)+(m.primary?"·":""),i)));}
+function renderMonitors(){
+  const box=$("#monitorSel"),card=$("#monCard");if(!box)return;
+  box.innerHTML="";
+  const n=scr.monitors.length;
+  if(card){card.hidden=n<=1;$("#monCount").textContent=n>1?n+" ÉCRANS":""}
+  if(n<=1)return;
+  const mk=(title,sub,idx)=>{const b=document.createElement("button");
+    b.className="mon"+(scr.mon===idx?" active":"");
+    b.innerHTML=`<b>${esc(title)}</b><span>${esc(sub)}</span>`;
+    b.onclick=()=>{vibe();selectMonitor(idx)};return b};
+  const totalW=scr.monitors.reduce((a,m)=>a+(m.width||0),0);
+  box.appendChild(mk("Tous","mosaïque "+totalW+"px",-1));
+  scr.monitors.forEach((m,i)=>box.appendChild(mk("Écran "+(i+1)+(m.primary?" ★":""),(m.width||"?")+"×"+(m.height||"?"),i)));
+}
+function selectMonitor(idx){
+  scr.mon=idx;scr.seq=-1;renderMonitors();
+  // Un changement d'écran change la géométrie : on relance le flux proprement.
+  const L=ladder();
+  act("StreamStart",{monitor:scr.mon,width:scr.forceW||L.w,quality:L.q,fps:30},true).catch(()=>{});
+  if(scr.on)reopenStream();
+}
 function ripple(x,y,right){const wrap=$("#screenWrap"),d=document.createElement("div");d.className="tap"+(right?" right":"");d.style.left=x+"px";d.style.top=y+"px";wrap.appendChild(d);setTimeout(()=>d.remove(),450)}
 function surface(){const c=$("#screenCv");return (c&&!c.hidden)?c:$("#screenImg")}
 function normPt(ev){const img=surface(),rect=img.getBoundingClientRect();return{nx:clamp((ev.clientX-rect.left)/rect.width,0,1),ny:clamp((ev.clientY-rect.top)/rect.height,0,1),lx:ev.clientX-rect.left,ly:ev.clientY-rect.top}}
@@ -559,7 +608,7 @@ async function runCmd(cmd){if(!cmd.trim())return;termHist.unshift(cmd);termIdx=-
     termWrite(`<div class="ok">— code ${r.exit_code}</div>`)}catch(e){termWrite(`<div class="err">${esc(e.message)}</div>`)}finally{setBusy(false)}}
 
 /* ===== Nav ===== */
-function switchTab(name){if(name!=="screen"){stopScreen();if(rec)stopRec()}tab=name;
+function switchTab(name){if(name!=="screen"){stopScreen();if(rec)stopRec();if(typeof kbOn!=="undefined"&&kbOn)setKb(false)}tab=name;
   $$(".view").forEach(v=>v.hidden=v.id!=="view-"+name);
   $$(".nav button").forEach(b=>b.classList.toggle("active",b.dataset.tab===name));
   if(name==="home")renderHome(data||{});
@@ -607,6 +656,35 @@ bindScreen();
 $$("[data-click]").forEach(b=>b.addEventListener("click",()=>{vibe();scr.clickMode=b.dataset.click;$$("[data-click]").forEach(x=>x.classList.toggle("active",x===b))}));
 $("#scrollToggle").addEventListener("click",()=>{scr.scrollMode=!scr.scrollMode;$("#scrollToggle").classList.toggle("active",scr.scrollMode);$("#scrollToggle").textContent=scr.scrollMode?"Molette ●":"Molette ○"});
 $("#fsBtn").addEventListener("click",()=>{const w=$("#screenWrap");if(w.requestFullscreen)w.requestFullscreen().catch(()=>{})});
+$("#monRefresh").addEventListener("click",()=>{vibe();act("ScreenInfo",null,true).then(r=>{if(Array.isArray(r.monitors)){scr.monitors=r.monitors;renderMonitors();toast(r.monitors.length+" écran(s)","ok")}}).catch(()=>{})});
+$("#allScreens").addEventListener("click",()=>{vibe();selectMonitor(-1)});
+
+// Clavier direct : tout ce qui est tapé part sur le PC, sans champ intermédiaire.
+// Pensé pour le bureau ; Échap rend la main.
+let kbOn=false;
+const KEYMAP={Enter:"enter",Backspace:"backspace",Tab:"tab",Delete:"delete",ArrowUp:"up",ArrowDown:"down",
+  ArrowLeft:"left",ArrowRight:"right",Home:"home",End:"end",PageUp:"pageup",PageDown:"pagedown",
+  F1:"f1",F2:"f2",F3:"f3",F4:"f4",F5:"f5",F11:"f11",F12:"f12"," ":"space"};
+function setKb(on){
+  kbOn=on;const b=$("#kbCapture");
+  b.classList.toggle("kbcap",on);
+  b.textContent=on?"⌨ Clavier actif (Échap)":"⌨ Clavier direct";
+  if(on)toast("Clavier envoyé au PC · Échap pour sortir","ok");
+}
+$("#kbCapture").addEventListener("click",()=>{vibe();setKb(!kbOn)});
+addEventListener("keydown",e=>{
+  if(!kbOn||tab!=="screen")return;
+  if(e.key==="Escape"){e.preventDefault();setKb(false);return}
+  const mods=[];if(e.ctrlKey)mods.push("ctrl");if(e.altKey)mods.push("alt");if(e.shiftKey)mods.push("shift");if(e.metaKey)mods.push("win");
+  const named=KEYMAP[e.key];
+  if(named){e.preventDefault();act("SendKey",{key:named,modifiers:mods},true).catch(()=>{});return}
+  if(e.key.length===1){
+    e.preventDefault();
+    // Un raccourci (Ctrl+C…) part en touche ; un caractère simple en texte.
+    if(mods.length&&!(mods.length===1&&mods[0]==="shift"))act("SendKey",{key:e.key.toLowerCase(),modifiers:mods},true).catch(()=>{});
+    else act("TypeText",{text:e.key},true).catch(()=>{});
+  }
+});
 // Capture PNG de la trame courante
 $("#snapBtn").addEventListener("click",()=>{const img=surface();if(img.hidden)return toast("Aucune image",'bad');vibe();
   const c=document.createElement("canvas");c.width=img.naturalWidth||img.width;c.height=img.naturalHeight||img.height;
@@ -783,8 +861,9 @@ BODY = r"""
     </div></div></div>
     <div class="seg" style="grid-template-columns:1fr 1fr 1fr"><button data-click="left" class="active">Clic</button><button data-click="right">Droit</button><button data-click="double">Double</button></div>
     <div class="row three"><button class="btn sm" id="scrollToggle">Molette ○</button><button class="btn sm" id="pasteClip">Coller</button><button class="btn sm" id="fsBtn">Plein écran</button></div>
-    <div class="row three"><button class="btn sm" id="snapBtn">📸 Capture</button><button class="btn sm" id="recBtn">⏺ Enregistrer</button><button class="btn sm" id="qualityBtn">Qualité: auto</button></div>
-    <span id="monitorSel" class="seg" hidden></span>
+    <div class="row three desk3"><button class="btn sm" id="snapBtn">📸 Capture</button><button class="btn sm" id="recBtn">⏺ Enregistrer</button><button class="btn sm" id="qualityBtn">Qualité: auto</button></div>
+    <div class="row three desk3"><button class="btn sm" id="kbCapture">⌨ Clavier direct</button><button class="btn sm" id="monRefresh">↻ Écrans</button><button class="btn sm" id="allScreens">🖥 Tous les écrans</button></div>
+    <div class="card" id="monCard" hidden><div class="card-h"><h2>Écrans</h2><span class="sub" id="monCount"></span></div><div class="card-b"><div class="mons" id="monitorSel"></div></div></div>
     <div class="card"><div class="card-h"><h2>Clavier</h2></div><div class="card-b">
       <div class="kbar"><input id="keyText" placeholder="Tape ici (envoi live)…" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="send"></div>
       <div class="keys" style="margin-top:10px">
