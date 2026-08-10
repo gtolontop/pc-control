@@ -14,6 +14,15 @@ Les changements notables de PC Control seront documentés dans ce fichier.
 
 ### Added
 
+- onglet Réglages : préférences persistées (vibrations, curseur distant, écran
+  toujours allumé, compteur d'images, confirmation d'alimentation), panneau de
+  connexion avec latence mesurée, bouton d'installation PWA ;
+- écran : enregistrement vidéo .webm sur le téléphone, capture PNG, sélecteur de
+  qualité auto/haute/basse ;
+- fichiers : filtre instantané, raccourcis Bureau/Téléchargements/Documents/Images/
+  Vidéos, compression .zip, création de fichier, copie du chemin ;
+- système : gestion des fenêtres (focus/fermer), presse-papiers PC ↔ téléphone,
+  envoi de notification et ouverture d'URL sur le PC ;
 - interface v11 refondue : plus fluide, micro-animations, streaming d'écran continu ;
 - écran distant : glisser-déposer (drag), molette au doigt, plein écran, clavier live,
   « coller » du presse-papiers du téléphone vers le PC ;
