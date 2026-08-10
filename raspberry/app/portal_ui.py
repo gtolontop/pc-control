@@ -109,7 +109,7 @@ button:disabled{opacity:.35;cursor:not-allowed}
 
 /* ---------- Écran distant ---------- */
 .screen-wrap{position:relative;background:#000;line-height:0;touch-action:none;user-select:none;overflow:hidden;aspect-ratio:16/9}
-.screen-wrap img{display:block;width:100%;height:100%;object-fit:contain}
+.screen-wrap img,.screen-wrap canvas{display:block;width:100%;height:100%;object-fit:contain}
 .screen-wrap .ph{position:absolute;inset:0;display:grid;place-items:center;color:var(--faint);font-size:12px;line-height:1.4}
 .rcursor{position:absolute;top:0;left:0;width:16px;height:16px;margin:-8px 0 0 -8px;pointer-events:none;z-index:5;transition:transform .08s linear;will-change:transform}
 .rcursor::before,.rcursor::after{content:"";position:absolute;inset:0;border-radius:50%}
@@ -357,37 +357,70 @@ function renderHome(d){const pc=d.pc||{},on=!!d.online,ready=!!d.control_ready;
 /* ===== Screen streaming ===== */
 function screenWidth(){if(scr.forceW)return scr.forceW;const w=$("#screenWrap").clientWidth||720;return clamp(Math.round(w*Math.min(2,window.devicePixelRatio||1)),640,1920)}
 function startScreen(){if(scr.on)return;scr.on=true;scr.seq=-1;scr.frames=0;scr.fpsT=performance.now();$("#liveBadge").hidden=false;
-  act("StreamStart",{monitor:scr.mon,width:screenWidth(),fps:30},true).catch(()=>{});loopScreen();}
-function stopScreen(){scr.on=false;cancelAnimationFrame(scr.raf);$("#liveBadge")&&($("#liveBadge").hidden=true);if(data?.online)act("StreamStop",null,true).catch(()=>{})}
+  act("StreamStart",{monitor:scr.mon,width:screenWidth(),fps:30},true).catch(()=>{});wsFail=0;openStream();}
+function stopScreen(){scr.on=false;closeStream();cancelAnimationFrame(scr.raf);scr.raf=0;$("#liveBadge")&&($("#liveBadge").hidden=true);if(data?.online)act("StreamStop",null,true).catch(()=>{})}
+// Flux poussé en WebSocket : une seule connexion, trames binaires brutes.
+// Repli automatique sur l'interrogation HTTP si le WebSocket échoue.
+let ws=null,wsFail=0,cv=null,cvCtx=null;
+function paintFrame(bitmap){
+  if(!cv){cv=$("#screenCv");cvCtx=cv.getContext("2d",{alpha:false,desynchronized:true})}
+  if(cv.width!==bitmap.width||cv.height!==bitmap.height){cv.width=bitmap.width;cv.height=bitmap.height}
+  cvCtx.drawImage(bitmap,0,0);if(bitmap.close)bitmap.close();
+  if(cv.hidden){cv.hidden=false;$("#screenImg").hidden=true;$("#screenPh").hidden=true}
+}
+function tickFps(){scr.frames++;const now=performance.now();
+  if(now-scr.fpsT>=1000){$("#fps").textContent=scr.frames+" fps";scr.frames=0;scr.fpsT=now}}
+function openStream(){
+  if(ws)return;
+  const proto=location.protocol==="https:"?"wss":"ws";
+  const url=proto+"://"+location.host+"/api/stream?k="+encodeURIComponent(key)+"&width="+screenWidth()+"&monitor="+scr.mon+"&fps=30";
+  let sock;try{sock=new WebSocket(url)}catch(e){startPolling();return}
+  sock.binaryType="arraybuffer";ws=sock;
+  sock.onmessage=async ev=>{
+    if(!(ev.data instanceof ArrayBuffer))return;
+    const view=new DataView(ev.data);const jlen=view.getUint32(0);
+    let meta={};try{meta=JSON.parse(new TextDecoder().decode(new Uint8Array(ev.data,4,jlen)))}catch(e){}
+    const jpeg=new Uint8Array(ev.data,4+jlen);
+    if(meta.cursor)placeCursor(meta.cursor,meta.w,meta.h);
+    if(Array.isArray(meta.monitors)&&meta.monitors.length!==scr.monitors.length){scr.monitors=meta.monitors;renderMonitors()}
+    if(jpeg.length){try{paintFrame(await createImageBitmap(new Blob([jpeg],{type:"image/jpeg"})));tickFps()}catch(e){}}
+  };
+  sock.onerror=()=>{};
+  sock.onclose=()=>{ws=null;if(scr.on&&tab==="screen"){wsFail++;if(wsFail>=3)startPolling();else setTimeout(openStream,400)}};
+}
+function closeStream(){if(ws){try{ws.close()}catch(e){}ws=null}}
+// Repli : ancienne boucle d'interrogation HTTP
 async function loopScreen(){
-  if(!scr.on||tab!=="screen"){return}
+  if(!scr.on||tab!=="screen"||ws){return}
   if(!scr.inflight){scr.inflight=true;
     try{
       const r=await api(`/api/screen?since=${scr.seq}&width=${screenWidth()}&monitor=${scr.mon}&fps=30`);
       if(r.ready===false){$("#screenPh").textContent="Démarrage du flux…"}
       else{
-        if(r.image){const img=$("#screenImg");img.src="data:image/jpeg;base64,"+r.image;img.hidden=false;$("#screenPh").hidden=true;scr.seq=r.img_seq;}
+        if(r.image){const img=$("#screenImg");img.src="data:image/jpeg;base64,"+r.image;img.hidden=false;$("#screenCv").hidden=true;$("#screenPh").hidden=true;scr.seq=r.img_seq;}
         else if(r.img_seq!=null)scr.seq=r.img_seq;
         if(r.cursor)placeCursor(r.cursor,r.w,r.h);
         if(Array.isArray(r.monitors)&&r.monitors.length!==scr.monitors.length){scr.monitors=r.monitors;renderMonitors()}
-        scr.frames++;const now=performance.now();if(now-scr.fpsT>=1000){$("#fps").textContent=scr.frames+" fps";scr.frames=0;scr.fpsT=now}
+        tickFps();
       }
-    }catch(e){if(e.un){scr.inflight=false;return lock(e.message)}if(e.status===409){$("#screenPh").textContent="Tour éteinte";$("#screenPh").hidden=false;$("#screenImg").hidden=true}}
+    }catch(e){if(e.un){scr.inflight=false;return lock(e.message)}if(e.status===409){$("#screenPh").textContent="Tour éteinte";$("#screenPh").hidden=false;$("#screenImg").hidden=true;$("#screenCv").hidden=true}}
     finally{scr.inflight=false}
   }
   scr.raf=requestAnimationFrame(loopScreen);
 }
-function placeCursor(c,w,h){const cur=$("#rcursor"),img=$("#screenImg");if(!w||!h||img.hidden){cur.classList.add("hide");return}
+function startPolling(){closeStream();if(!scr.raf)loopScreen()}
+function placeCursor(c,w,h){const cur=$("#rcursor"),img=surface();if(!w||!h||img.hidden){cur.classList.add("hide");return}
   const rect=img.getBoundingClientRect();const x=c.x/w*rect.width,y=c.y/h*rect.height;
   cur.classList.toggle("hide",!c.on);cur.style.transform=`translate(${x}px,${y}px)`;}
 function renderMonitors(){const box=$("#monitorSel");box.innerHTML="";if(scr.monitors.length<=1){box.hidden=true;return}box.hidden=false;
   const mk=(l,i)=>{const b=document.createElement("button");b.textContent=l;b.className=scr.mon===i?"active":"";b.onclick=()=>{scr.mon=i;scr.seq=-1;renderMonitors()};return b};
   box.appendChild(mk("Tous",-1));scr.monitors.forEach((m,i)=>box.appendChild(mk("É"+(i+1)+(m.primary?"·":""),i)));}
 function ripple(x,y,right){const wrap=$("#screenWrap"),d=document.createElement("div");d.className="tap"+(right?" right":"");d.style.left=x+"px";d.style.top=y+"px";wrap.appendChild(d);setTimeout(()=>d.remove(),450)}
-function normPt(ev){const img=$("#screenImg"),rect=img.getBoundingClientRect();return{nx:clamp((ev.clientX-rect.left)/rect.width,0,1),ny:clamp((ev.clientY-rect.top)/rect.height,0,1),lx:ev.clientX-rect.left,ly:ev.clientY-rect.top}}
+function surface(){const c=$("#screenCv");return (c&&!c.hidden)?c:$("#screenImg")}
+function normPt(ev){const img=surface(),rect=img.getBoundingClientRect();return{nx:clamp((ev.clientX-rect.left)/rect.width,0,1),ny:clamp((ev.clientY-rect.top)/rect.height,0,1),lx:ev.clientX-rect.left,ly:ev.clientY-rect.top}}
 function bindScreen(){
   const wrap=$("#screenWrap");let down=null,longT=0,moved=false,didLong=false;
-  wrap.addEventListener("pointerdown",e=>{if($("#screenImg").hidden)return;down=normPt(e);moved=false;didLong=false;try{wrap.setPointerCapture(e.pointerId)}catch{}
+  wrap.addEventListener("pointerdown",e=>{if(surface().hidden)return;down=normPt(e);moved=false;didLong=false;try{wrap.setPointerCapture(e.pointerId)}catch{}
     longT=setTimeout(()=>{didLong=true;vibe(12);ripple(down.lx,down.ly,true);act("Click",{monitor:scr.mon,nx:down.nx,ny:down.ny,button:"right"},true).catch(()=>{})},480)});
   wrap.addEventListener("pointermove",e=>{if(!down)return;const p=normPt(e);if(Math.hypot(p.lx-down.lx,p.ly-down.ly)>10)moved=true;});
   wrap.addEventListener("pointerup",e=>{if(!down){return}clearTimeout(longT);const p=normPt(e);
@@ -545,8 +578,8 @@ $$("[data-click]").forEach(b=>b.addEventListener("click",()=>{vibe();scr.clickMo
 $("#scrollToggle").addEventListener("click",()=>{scr.scrollMode=!scr.scrollMode;$("#scrollToggle").classList.toggle("active",scr.scrollMode);$("#scrollToggle").textContent=scr.scrollMode?"Molette ●":"Molette ○"});
 $("#fsBtn").addEventListener("click",()=>{const w=$("#screenWrap");if(w.requestFullscreen)w.requestFullscreen().catch(()=>{})});
 // Capture PNG de la trame courante
-$("#snapBtn").addEventListener("click",()=>{const img=$("#screenImg");if(img.hidden)return toast("Aucune image",'bad');vibe();
-  const c=document.createElement("canvas");c.width=img.naturalWidth;c.height=img.naturalHeight;
+$("#snapBtn").addEventListener("click",()=>{const img=surface();if(img.hidden)return toast("Aucune image",'bad');vibe();
+  const c=document.createElement("canvas");c.width=img.naturalWidth||img.width;c.height=img.naturalHeight||img.height;
   c.getContext("2d").drawImage(img,0,0);
   c.toBlob(bl=>{if(bl)saveBlob(bl,"gtol-"+Date.now()+".png");toast("Capture enregistrée","ok")},"image/png")});
 // Enregistrement vidéo : on peint chaque trame reçue dans un canvas capturé par MediaRecorder
@@ -555,14 +588,14 @@ let recRaf=0;
 // Boucle de peinture continue : MediaRecorder a besoin d'un flux régulier, sinon
 // il n'émet aucun bloc quand l'écran distant est statique.
 function recPaint(){if(!rec||!recCtx){recRaf=0;return}
-  const img=$("#screenImg");
-  if(!img.hidden&&img.naturalWidth){
-    if(recCanvas.width!==img.naturalWidth||recCanvas.height!==img.naturalHeight){recCanvas.width=img.naturalWidth;recCanvas.height=img.naturalHeight}
+  const img=surface();const iw=img.naturalWidth||img.width,ih=img.naturalHeight||img.height;
+  if(!img.hidden&&iw){
+    if(recCanvas.width!==iw||recCanvas.height!==ih){recCanvas.width=iw;recCanvas.height=ih}
     recCtx.drawImage(img,0,0)}
   recRaf=requestAnimationFrame(recPaint)}
-function startRec(){const img=$("#screenImg");if(img.hidden)return toast("Démarre le flux d'abord","bad");
+function startRec(){const img=surface();if(img.hidden)return toast("Démarre le flux d'abord","bad");
   if(!window.MediaRecorder||!HTMLCanvasElement.prototype.captureStream)return toast("Enregistrement non supporté","bad");
-  recCanvas=document.createElement("canvas");recCanvas.width=img.naturalWidth||1280;recCanvas.height=img.naturalHeight||720;
+  recCanvas=document.createElement("canvas");recCanvas.width=img.naturalWidth||img.width||1280;recCanvas.height=img.naturalHeight||img.height||720;
   recCtx=recCanvas.getContext("2d");recPaint();
   const stream=recCanvas.captureStream(25);recChunks=[];
   const types=["video/webm;codecs=vp9","video/webm;codecs=vp8","video/webm","video/mp4"];
@@ -705,7 +738,7 @@ BODY = r"""
 
   <section class="view" id="view-screen" hidden>
     <div class="card"><div class="card-b flush"><div class="screen-wrap" id="screenWrap">
-      <img id="screenImg" hidden alt="Écran">
+      <img id="screenImg" hidden alt="Écran"><canvas id="screenCv" hidden></canvas>
       <div class="rcursor hide" id="rcursor"></div>
       <div class="livebadge" id="liveBadge" hidden><i></i>LIVE</div>
       <div class="fps" id="fps">— fps</div>

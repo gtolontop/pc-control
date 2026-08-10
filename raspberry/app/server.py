@@ -1385,6 +1385,99 @@ class Handler(BaseHTTPRequestHandler):
             return False
         return True
 
+    # ----------------------------------------------------------------- #
+    # Flux d'écran en WebSocket : le serveur POUSSE les trames.
+    #
+    # L'ancien mode (une requête HTTP par image + image encodée en base64)
+    # payait un aller-retour complet et +33 % de volume par trame. Ici la
+    # connexion reste ouverte et chaque trame part en binaire brut, dès qu'elle
+    # change : moins d'octets, plus d'images, et surtout plus d'attente.
+    #
+    # Format d'une trame : [4 octets big-endian = taille du JSON][JSON][JPEG]
+    # Le JSON porte la séquence, les dimensions et la position du curseur.
+    # ----------------------------------------------------------------- #
+
+    WS_MAGIC = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+
+    def ws_accept_key(self, key):
+        digest = hashlib.sha1((key + self.WS_MAGIC).encode()).digest()
+        return base64.b64encode(digest).decode()
+
+    def ws_send(self, payload, opcode=0x2):
+        header = bytearray([0x80 | opcode])
+        length = len(payload)
+        if length < 126:
+            header.append(length)
+        elif length < 65536:
+            header.append(126)
+            header += struct.pack(">H", length)
+        else:
+            header.append(127)
+            header += struct.pack(">Q", length)
+        self.connection.sendall(bytes(header) + payload)
+
+    def stream_screen_ws(self, query):
+        key = self.headers.get("Sec-WebSocket-Key")
+        if not key:
+            self.send_json(400, {"error": "WebSocket attendu"})
+            return
+        # L'en-tête Authorization n'est pas transmis par l'API WebSocket du
+        # navigateur : la clé arrive donc en paramètre d'URL, sur un canal déjà
+        # chiffré par le tunnel.
+        token = query.get("k", [""])[0]
+        if not hmac.compare_digest(token, TOKEN):
+            self.send_json(401, {"error": "Clé incorrecte"})
+            return
+
+        # Le reste du service parle HTTP/1.0 ; une bascule WebSocket exige une
+        # réponse 101 en HTTP/1.1. On ne change la version que pour cet échange.
+        self.protocol_version = "HTTP/1.1"
+        self.close_connection = True
+        self.send_response(101, "Switching Protocols")
+        self.send_header("Upgrade", "websocket")
+        self.send_header("Connection", "Upgrade")
+        self.send_header("Sec-WebSocket-Accept", self.ws_accept_key(key))
+        self.end_headers()
+
+        def as_int(name, default):
+            try:
+                return int(query.get(name, [str(default)])[0])
+            except (ValueError, TypeError):
+                return default
+
+        args = {
+            "monitor": as_int("monitor", -1),
+            "width": as_int("width", 1280),
+            "fps": as_int("fps", 30),
+        }
+        since = -1
+        idle = 0
+        self.connection.settimeout(20)
+        try:
+            while True:
+                args["since"] = since
+                header, image = pc_channel("Frame", args, timeout=15)
+                if header.get("img_seq") is not None:
+                    since = header["img_seq"]
+                meta = {
+                    "seq": header.get("img_seq"),
+                    "w": header.get("w"),
+                    "h": header.get("h"),
+                    "cursor": header.get("cursor"),
+                    "monitors": header.get("monitors"),
+                    "changed": bool(image),
+                }
+                blob = json.dumps(meta, ensure_ascii=False).encode("utf-8")
+                self.ws_send(struct.pack(">I", len(blob)) + blob + image)
+                # Écran figé : petite pause pour ne pas tourner à vide, mais
+                # plafonnée bas afin de repartir immédiatement au premier
+                # changement (le seul coût est ~1 requête vide par 40 ms).
+                idle = 0 if image else min(idle + 1, 4)
+                if idle:
+                    time.sleep(0.01 * idle)
+        except (OSError, RuntimeError, BrokenPipeError, ConnectionResetError):
+            pass
+
     def stream_events(self):
         """Flux SSE authentifié : état complet toutes les quatre secondes."""
         global STATUS_SUBSCRIBERS
@@ -1468,6 +1561,13 @@ class Handler(BaseHTTPRequestHandler):
             if not self.guard_api():
                 return
             self.stream_events()
+            return
+
+        if path == "/api/stream":
+            if (self.headers.get("Upgrade") or "").lower() == "websocket":
+                self.stream_screen_ws(query)
+            else:
+                self.send_json(400, {"error": "WebSocket attendu"})
             return
 
         if path == "/api/screen":

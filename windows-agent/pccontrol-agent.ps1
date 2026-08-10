@@ -695,6 +695,15 @@ function Get-FrameResponse {
     try { $meta = Get-Content -LiteralPath $FrameMeta -Raw -Encoding UTF8 | ConvertFrom-Json } catch { }
     if (-not $meta) { return @{ header = @{ ok = $true; ready = $false }; bytes = $null } }
 
+    # Le daemon de capture peut être mort en laissant sa dernière trame sur le
+    # disque : sans ce contrôle de fraîcheur, on servirait une image figée
+    # indéfiniment. Au-delà de 3 s sans nouvelle trame, on le relance.
+    $age = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() - [int64]$meta.ts
+    if ($age -gt 3) {
+        Invoke-StreamStart $Arguments | Out-Null
+        return @{ header = @{ ok = $true; ready = $false; restarting = $true }; bytes = $null }
+    }
+
     $since = [int](Get-ArgValue $Arguments 'since' -1)
     $header = @{
         ok = $true
