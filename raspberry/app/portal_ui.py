@@ -193,8 +193,19 @@ button:disabled{opacity:.35;cursor:not-allowed}
 .apps .ap-ic{font-size:20px;line-height:1}
 .apps .ap-nm{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 
+.set{display:flex;align-items:center;justify-content:space-between;gap:var(--s3);min-height:54px;padding:var(--s3) 0;border-bottom:1px solid var(--line)}
+.set:first-child{padding-top:0}.set:last-child{border-bottom:0;padding-bottom:0}
+.set .txt{min-width:0}
+.set .txt b{display:block;font-size:13px;font-weight:550}
+.set .txt span{display:block;color:var(--faint);font-size:11px;line-height:1.35;margin-top:2px}
+.sw{position:relative;width:44px;height:26px;flex:none}
+.sw input{position:absolute;opacity:0;width:100%;height:100%;margin:0;cursor:pointer}
+.sw i{display:block;width:44px;height:26px;border:1px solid var(--edge);border-radius:999px;background:var(--bg);transition:background .2s,border-color .2s}
+.sw i::after{content:"";display:block;width:18px;height:18px;margin:3px;border-radius:50%;background:var(--faint);transition:transform .22s cubic-bezier(.2,.8,.2,1),background .2s}
+.sw input:checked+i{background:var(--ok);border-color:var(--ok)}
+.sw input:checked+i::after{transform:translateX(18px);background:#0a0a0c}
 /* ---------- Navigation ---------- */
-.nav{position:fixed;inset-inline:0;bottom:0;z-index:40;display:grid;grid-template-columns:repeat(5,1fr);
+.nav{position:fixed;inset-inline:0;bottom:0;z-index:40;display:grid;grid-template-columns:repeat(6,1fr);
   height:calc(var(--nav) + env(safe-area-inset-bottom));padding-bottom:env(safe-area-inset-bottom);
   background:rgba(12,12,14,.86);backdrop-filter:blur(18px) saturate(1.3);border-top:1px solid var(--line)}
 .nav button{position:relative;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;color:var(--faint);font-size:9.5px;font-weight:550;letter-spacing:.01em;transition:color .2s}
@@ -267,7 +278,24 @@ const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const fmtDur=m=>{if(!Number.isFinite(m))return"—";const h=Math.floor(m/60),n=Math.round(m%60),d=Math.floor(h/24);return d?`${d}j ${h%24}h`:h?`${h}h${String(n).padStart(2,"0")}`:`${n}min`};
 const human=b=>{if(b==null)return"";if(b<1024)return b+" o";if(b<1048576)return(b/1024).toFixed(0)+" Ko";if(b<1073741824)return(b/1048576).toFixed(1)+" Mo";return(b/1073741824).toFixed(2)+" Go"};
-function vibe(ms=6){try{navigator.vibrate&&navigator.vibrate(ms)}catch{}}
+const PREFS_KEY="pcControlPrefs";
+const PREF_DEFAULTS={vibe:true,cursor:true,wake:false,fps:true,confirm:true};
+let prefs={...PREF_DEFAULTS};
+try{Object.assign(prefs,JSON.parse(localStorage.getItem(PREFS_KEY)||"{}"))}catch{}
+function savePrefs(){try{localStorage.setItem(PREFS_KEY,JSON.stringify(prefs))}catch{}}
+function vibe(ms=6){if(!prefs.vibe)return;try{navigator.vibrate&&navigator.vibrate(ms)}catch{}}
+let wakeLock=null;
+async function applyWakeLock(){
+  try{
+    if(prefs.wake&&"wakeLock" in navigator){if(!wakeLock)wakeLock=await navigator.wakeLock.request("screen")}
+    else if(wakeLock){await wakeLock.release();wakeLock=null}
+  }catch{wakeLock=null}
+}
+function applyPrefs(){
+  const c=$("#rcursor");if(c)c.style.display=prefs.cursor?"":"none";
+  const f=$("#fps");if(f)f.style.display=prefs.fps?"":"none";
+  applyWakeLock();
+}
 function setBusy(v){busyN=Math.max(0,busyN+(v?1:-1));busyEl.classList.toggle("on",busyN>0)}
 function toast(t,kind){toastEl.textContent=t;toastEl.className="toast show "+(kind||"");clearTimeout(toastT);toastT=setTimeout(()=>toastEl.className="toast",2400)}
 
@@ -476,6 +504,7 @@ function switchTab(name){if(name!=="screen"){stopScreen();if(rec)stopRec()}tab=n
   if(name==="files")loadDir(filePath||"");
   if(name==="system")loadSystem();
   if(name==="terminal")setTimeout(()=>$("#termIn").focus(),80);
+  if(name==="settings"){renderConn();measurePing();$("#verLine").textContent="Interface v11 · "+(scr.monitors.length||1)+" écran(s)"}
   window.scrollTo(0,0)}
 
 /* ===== Dialogs ===== */
@@ -497,7 +526,7 @@ $$(".nav button").forEach(b=>b.addEventListener("click",()=>{vibe();switchTab(b.
 $("#crumb").addEventListener("click",e=>{const b=e.target.closest("[data-p]");if(b)loadDir(b.dataset.p)});
 
 // Home actions
-async function legacy(action,cfx,label){vibe();if(cfx&&!(await confirm2(label,cfx)))return;setBusy(true);try{const r=await api("/api/control","POST",{action});toast(r.message||"OK","ok");setTimeout(refresh,600)}catch(e){if(e.un)lock(e.message);else toast(e.message,"bad")}finally{setBusy(false)}}
+async function legacy(action,cfx,label){vibe();if(cfx&&prefs.confirm&&!(await confirm2(label,cfx)))return;setBusy(true);try{const r=await api("/api/control","POST",{action});toast(r.message||"OK","ok");setTimeout(refresh,600)}catch(e){if(e.un)lock(e.message);else toast(e.message,"bad")}finally{setBusy(false)}}
 $("#wakeBtn").addEventListener("click",async()=>{vibe();try{const r=await api("/api/wake","POST");toast(r.message||"Signal envoyé","ok");setTimeout(refresh,1500)}catch(e){if(e.un)lock(e.message);else toast(e.message,"bad")}});
 $("#lockBtn").addEventListener("click",()=>{vibe();act("Lock").then(r=>toast(r.message||"Verrouillé","ok")).catch(()=>{})});
 $("#shareParsec").addEventListener("click",()=>legacy("share-parsec"));
@@ -596,11 +625,32 @@ $("#termForm").addEventListener("submit",e=>{e.preventDefault();const v=$("#term
 $("#termIn").addEventListener("keydown",e=>{if(e.key==="ArrowUp"){e.preventDefault();if(termIdx<termHist.length-1){termIdx++;$("#termIn").value=termHist[termIdx]}}else if(e.key==="ArrowDown"){e.preventDefault();if(termIdx>0){termIdx--;$("#termIn").value=termHist[termIdx]}else{termIdx=-1;$("#termIn").value=""}}});
 $("#termClear").addEventListener("click",()=>$("#termOut").innerHTML="");
 $("#forget").addEventListener("click",()=>{localStorage.removeItem(KEY);location.reload()});
+$("#forget2").addEventListener("click",()=>{localStorage.removeItem(KEY);location.reload()});
+$("#clearCache").addEventListener("click",()=>{dirCache.clear();toast("Cache vidé","ok")});
+[["prefVibe","vibe"],["prefCursor","cursor"],["prefWake","wake"],["prefFps","fps"],["prefConfirm","confirm"]].forEach(([id,key])=>{
+  const el=$("#"+id);if(!el)return;el.checked=!!prefs[key];
+  el.addEventListener("change",()=>{prefs[key]=el.checked;savePrefs();applyPrefs();vibe()})});
+let installEvt=null;
+addEventListener("beforeinstallprompt",e=>{e.preventDefault();installEvt=e;const b=$("#installBtn");if(b)b.hidden=false});
+$("#installBtn").addEventListener("click",async()=>{if(!installEvt)return;installEvt.prompt();await installEvt.userChoice;installEvt=null;$("#installBtn").hidden=true});
+// Mesure de latence affichée dans Réglages
+let pingMs=null;
+async function measurePing(){const t=performance.now();try{await api("/api/status");pingMs=Math.round(performance.now()-t)}catch{pingMs=null}renderConn()}
+function renderConn(){const box=$("#connInfo");if(!box)return;
+  const pc=data?.pc||{};const rows=[
+    ["État",data?.control_ready?"Pont prêt":data?.online?"Pont muet":"Tour éteinte"],
+    ["Latence portail",pingMs==null?"—":pingMs+" ms"],
+    ["Machine",pc.computer||"—"],
+    ["Profil",pc.mode==="night"?"Nuit":pc.mode==="normal"?"Normal":"—"],
+    ["Passerelle",data?.gateway?.uptime_minutes!=null?"up "+fmtDur(data.gateway.uptime_minutes):"—"]];
+  box.innerHTML=rows.map(([k,v])=>`<div class="kv"><span class="lab">${esc(k)}</span><b>${esc(v)}</b></div>`).join("")}
 
 document.addEventListener("visibilitychange",()=>{if(document.hidden){stopStream();stopScreen()}else if(key){connectStream();refresh();if(tab==="screen")startScreen()}});
 addEventListener("resize",()=>{if(tab==="screen"&&data)placeCursor({x:0,y:0,on:false},1,1)});
 const hk=new URLSearchParams(location.hash.slice(1)).get("k");if(hk?.trim()){key=hk.trim();localStorage.setItem(KEY,key);history.replaceState(null,"",location.pathname)}
 navigator.storage?.persist?.().catch(()=>{});navigator.serviceWorker?.register("/sw.js",{updateViaCache:"none"}).catch(()=>{});
+applyPrefs();
+document.addEventListener("visibilitychange",()=>{if(!document.hidden)applyWakeLock()});
 if(key){gate.hidden=true;app.hidden=false;start()}else field.focus();
 })();
 """
@@ -721,12 +771,30 @@ BODY = r"""
     </div>
   </section>
 
+  <section class="view" id="view-settings" hidden>
+    <div class="card"><div class="card-h"><h2>Connexion</h2></div><div class="card-b" id="connInfo"></div></div>
+    <div class="card"><div class="card-h"><h2>Préférences</h2></div><div class="card-b">
+      <label class="set"><span class="txt"><b>Vibrations</b><span>Retour haptique sur chaque action</span></span><span class="sw"><input type="checkbox" id="prefVibe"><i></i></span></label>
+      <label class="set"><span class="txt"><b>Curseur distant</b><span>Afficher la position de la souris du PC</span></span><span class="sw"><input type="checkbox" id="prefCursor"><i></i></span></label>
+      <label class="set"><span class="txt"><b>Écran toujours allumé</b><span>Empêche le téléphone de se verrouiller</span></span><span class="sw"><input type="checkbox" id="prefWake"><i></i></span></label>
+      <label class="set"><span class="txt"><b>Compteur d'images</b><span>Affiche les fps sur le flux</span></span><span class="sw"><input type="checkbox" id="prefFps"><i></i></span></label>
+      <label class="set"><span class="txt"><b>Confirmer l'alimentation</b><span>Demander avant d'éteindre ou redémarrer</span></span><span class="sw"><input type="checkbox" id="prefConfirm"><i></i></span></label>
+    </div></div>
+    <div class="card"><div class="card-h"><h2>Application</h2></div><div class="card-b"><div class="row">
+      <button class="btn sm" id="installBtn" hidden style="width:100%">⤓ Installer l'application</button>
+      <button class="btn sm" id="clearCache" style="width:100%">Vider le cache des dossiers</button>
+      <button class="btn sm bad" id="forget2" style="width:100%">Oublier la clé et se déconnecter</button>
+    </div></div></div>
+    <div class="card"><div class="card-b"><p class="empty" style="padding:var(--s2) 0">PC Control · canal LAN direct<br><span id="verLine"></span></p></div></div>
+  </section>
+
   <nav class="nav">
     <button data-tab="home" class="active"><span class="ni">▦</span>Accueil</button>
     <button data-tab="screen"><span class="ni">▣</span>Écran</button>
     <button data-tab="files"><span class="ni">🗂</span>Fichiers</button>
-    <button data-tab="system"><span class="ni">⚙</span>Système</button>
+    <button data-tab="system"><span class="ni">▤</span>Système</button>
     <button data-tab="terminal"><span class="ni">›_</span>Terminal</button>
+    <button data-tab="settings"><span class="ni">⚙︎</span>Réglages</button>
   </nav>
 </main>
 
