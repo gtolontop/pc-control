@@ -623,6 +623,8 @@ function Get-SessionSnapshot {
         monitors = Get-Screens
         window = $foreground
         apps = Get-AppSummary
+        home = [string]$env:USERPROFILE
+        computer = [string]$env:COMPUTERNAME
     }
 }
 

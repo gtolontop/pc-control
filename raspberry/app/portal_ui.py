@@ -141,7 +141,12 @@ button:disabled{opacity:.35;cursor:not-allowed}
 .crumb button{color:var(--dim);font-size:12px;padding:2px 3px;border-radius:5px}
 .crumb button:hover{color:var(--text);background:var(--raised)}
 .crumb .sep{color:var(--faint);opacity:.5}
-.toolbar{display:flex;gap:var(--s2);flex-wrap:wrap;padding:var(--s3) var(--s4);border-bottom:1px solid var(--line)}
+.toolbar{display:flex;gap:var(--s2);flex-wrap:wrap;align-items:center;padding:var(--s3) var(--s4);border-bottom:1px solid var(--line)}
+.toolbar:empty{display:none}
+.search{flex:1;min-width:0;min-height:38px;padding:0 var(--s3);border:1px solid var(--edge);border-radius:var(--rs);background:var(--bg);font-size:15px}
+.search::placeholder{color:var(--faint)}
+.fav{display:inline-flex;align-items:center;gap:6px;height:32px;padding:0 11px;border:1px solid var(--line);border-radius:999px;background:var(--bg);color:var(--dim);font-size:11.5px;white-space:nowrap;transition:background .15s,color .15s,border-color .15s}
+.fav:hover{color:var(--text);border-color:var(--edge);background:var(--raised)}
 .list{display:grid}
 .item{display:grid;grid-template-columns:22px minmax(0,1fr) auto;align-items:center;gap:var(--s3);width:100%;min-height:58px;padding:var(--s3) var(--s4);border-bottom:1px solid var(--line);text-align:left;transition:background .13s;animation:rowin .22s ease both}
 @keyframes rowin{from{opacity:0;transform:translateY(3px)}to{opacity:1;transform:none}}
@@ -257,7 +262,7 @@ const gate=$("#gate"),app=$("#app"),field=$("#key"),gateErr=$("#gateErr"),busyEl
 let key=localStorage.getItem(KEY)||"";
 let data=null,tab="home",stream=null,streamStop=null,busyN=0,toastT=0;
 let scr={on:false,seq:-1,inflight:false,mon:-1,monitors:[],raf:0,frames:0,fpsT:0,clickMode:"left",scrollMode:false,last:0};
-let filePath="",fileSort="name";
+let filePath="",fileSort="name",sysHome="";
 const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const fmtDur=m=>{if(!Number.isFinite(m))return"—";const h=Math.floor(m/60),n=Math.round(m%60),d=Math.floor(h/24);return d?`${d}j ${h%24}h`:h?`${h}h${String(n).padStart(2,"0")}`:`${n}min`};
@@ -285,7 +290,7 @@ function lock(reason){stopStream();stopScreen();localStorage.removeItem(KEY);key
 function unlock(v){key=(v||"").trim();if(!key){gateErr.textContent="Saisis la clé.";return}localStorage.setItem(KEY,key);gate.hidden=true;app.hidden=false;start()}
 
 /* Status stream */
-function start(){refresh();connectStream();switchTab(tab)}
+function start(){refresh();connectStream();switchTab(tab);act("SessionInfo",null,true).then(i=>{if(i?.home){sysHome=i.home;renderFavs()}}).catch(()=>{})}
 async function refresh(){try{apply(await api("/api/status"))}catch(e){if(e.un)lock(e.message)}}
 function connectStream(){
   if(stream)return;const ctrl=new AbortController();streamStop=()=>ctrl.abort();
@@ -374,7 +379,7 @@ function b64ToBytes(b64){const bin=atob(b64),a=new Uint8Array(bin.length);for(le
 function bytesToB64(bytes){let bin="";const CH=0x8000;for(let i=0;i<bytes.length;i+=CH)bin+=String.fromCharCode.apply(null,bytes.subarray(i,i+CH));return btoa(bin)}
 let dirSeq=0,dirCache=new Map();
 async function loadDir(path){
-  filePath=path;const my=++dirSeq;
+  filePath=path;const my=++dirSeq;fileFilter="";const sf=$("#fileSearch");if(sf)sf.value="";
   // Rendu immédiat depuis le cache : la navigation paraît instantanée, puis on
   // rafraîchit dès que la réponse arrive (~10 ms via le canal LAN).
   const hit=dirCache.get(path);if(hit)renderDir(hit);else $("#fileList").innerHTML='<p class="empty">…</p>';
@@ -383,11 +388,15 @@ async function loadDir(path){
 function sortEntries(list){const dirs=list.filter(e=>e.dir),files=list.filter(e=>!e.dir);
   const by=fileSort==="size"?(a,b)=>(b.size||0)-(a.size||0):fileSort==="date"?(a,b)=>(b.modified||0)-(a.modified||0):(a,b)=>a.name.localeCompare(b.name);
   files.sort(by);dirs.sort((a,b)=>a.name.localeCompare(b.name));return[...dirs,...files]}
-function renderDir(r){const list=$("#fileList");list.innerHTML="";
+let lastDir=null,fileFilter="";
+function renderDir(r){lastDir=r;const list=$("#fileList");list.innerHTML="";
   $("#crumb").innerHTML=r.is_root?"<b>Disques</b>":crumbHtml(r.path);
   $("#fileToolbar").hidden=!!r.is_root;
-  const entries=sortEntries(r.entries||[]);
-  if(!entries.length){list.innerHTML='<p class="empty">Dossier vide</p>';return}
+  $("#fileSearchBar").hidden=!!r.is_root;
+  let src=r.entries||[];
+  if(fileFilter){const q=fileFilter.toLocaleLowerCase("fr");src=src.filter(e=>e.name.toLocaleLowerCase("fr").includes(q))}
+  const entries=sortEntries(src);
+  if(!entries.length){list.innerHTML='<p class="empty">'+(fileFilter?"Aucun résultat":"Dossier vide")+'</p>';return}
   for(const e of entries){const b=document.createElement("button");b.className="item";
     b.innerHTML=`<span class="ic">${e.dir?"📁":icon(e.name)}</span><span class="nm"><b>${esc(e.name)}</b><span>${e.dir?"":human(e.size)}</span></span><span class="go">${e.dir?"›":"⋯"}</span>`;
     b.onclick=()=>e.dir?loadDir(e.path):fileMenu(e);list.appendChild(b);}
@@ -398,13 +407,17 @@ function icon(n){const x=(n.split(".").pop()||"").toLowerCase();return ICONS[x]|
 function isImg(n){return/\.(jpe?g|png|gif|webp|bmp)$/i.test(n)}
 async function fileMenu(e){const opts=[["▶ Ouvrir sur le PC","open"],["Afficher dans l'explorateur","reveal"]];
   if(isImg(e.name))opts.push(["Aperçu image","img"]);else opts.push(["Aperçu texte","view"]);
-  opts.push(["Télécharger","dl"],["Renommer","ren"],["Supprimer","del"]);
+  opts.push(["Télécharger","dl"],["Copier le chemin","path"],["Compresser en .zip","zip"],["Renommer","ren"],["Supprimer","del"]);
   const c=await pick(e.name,opts);
   if(c==="view")try{const r=await act("FsRead",{path:e.path});textDlg(e.name,r.text)}catch(err){toast(err.message,"bad")}
   else if(c==="img")imgDlg(e);
   else if(c==="dl")downloadFile(e);
   else if(c==="open")act("OpenPath",{path:e.path}).then(r=>toast(r.message||"Ouvert","ok")).catch(()=>{});
   else if(c==="reveal")act("OpenPath",{path:e.path,reveal:true}).then(r=>toast(r.message||"Affiché","ok")).catch(()=>{});
+  else if(c==="path"){try{await navigator.clipboard.writeText(e.path);toast("Chemin copié","ok")}catch{textDlg("Chemin",e.path)}}
+  else if(c==="zip"){const dot=e.path.lastIndexOf(".");const cut=dot>e.path.lastIndexOf("\\")?dot:e.path.length;const dest=e.path.slice(0,cut)+".zip";
+    await act("Exec",{command:`Compress-Archive -LiteralPath '${e.path.replace(/'/g,"''")}' -DestinationPath '${dest.replace(/'/g,"''")}' -Force`},true)
+      .then(r=>{toast(r.ok?"Compressé":"Échec compression",r.ok?"ok":"bad");dirCache.delete(filePath);loadDir(filePath)}).catch(err=>toast(err.message,"bad"))}
   else if(c==="ren"){const nn=await prompt2("Renommer",e.name);if(nn)await act("FsRename",{path:e.path,name:nn}).then(()=>{toast("Renommé","ok");dirCache.delete(filePath);loadDir(filePath)}).catch(err=>toast(err.message,"bad"))}
   else if(c==="del"&&await confirm2("Supprimer ?",e.name))await act("FsDelete",{path:e.path,recurse:e.dir}).then(()=>{toast("Supprimé","ok");dirCache.delete(filePath);loadDir(filePath)}).catch(err=>toast(err.message,"bad"))}
 async function imgDlg(e){try{const r=await act("FsDownload",{path:e.path});const url="data:image/*;base64,"+r.content_base64;$("#dlgBody").innerHTML=`<h3>${esc(e.name)}</h3><img src="${url}"><button class="btn" id="dc">Fermer</button>`;$("#dlg").showModal();$("#dc").onclick=()=>$("#dlg").close()}catch(err){toast(err.message,"bad")}}
@@ -518,6 +531,19 @@ $("#fileUp").addEventListener("click",()=>loadDir(parentPath(filePath)));
 $("#fileRefresh").addEventListener("click",()=>{dirCache.delete(filePath);loadDir(filePath)});
 $("#newFolder").addEventListener("click",async()=>{const n=await prompt2("Nouveau dossier","");if(n)await act("FsMkdir",{path:filePath.replace(/\\+$/,"")+"\\"+n}).then(()=>{toast("Créé","ok");dirCache.delete(filePath);loadDir(filePath)}).catch(e=>toast(e.message,"bad"))});
 $("#uploadInput").addEventListener("change",e=>{if(e.target.files.length)uploadFiles([...e.target.files]);e.target.value=""});
+$("#newFile").addEventListener("click",async()=>{const n=await prompt2("Nouveau fichier","note.txt");if(!n)return;
+  await act("FsWrite",{path:filePath.replace(/\+$/,"")+"\\"+n,text:""}).then(()=>{toast("Créé","ok");dirCache.delete(filePath);loadDir(filePath)}).catch(e=>toast(e.message,"bad"))});
+let searchT=0;
+$("#fileSearch").addEventListener("input",e=>{fileFilter=e.target.value.trim();clearTimeout(searchT);searchT=setTimeout(()=>{if(lastDir)renderDir(lastDir)},110)});
+$("#fileSearchClear").addEventListener("click",()=>{fileFilter="";$("#fileSearch").value="";if(lastDir)renderDir(lastDir)});
+const FAVS=[["Bureau","Desktop"],["Téléch.","Downloads"],["Documents","Documents"],["Images","Pictures"],["Vidéos","Videos"]];
+function renderFavs(){const box=$("#fileFav");box.innerHTML="";
+  const home=sysHome||"C:\Users";
+  const mk=(label,path)=>{const b=document.createElement("button");b.className="fav";b.textContent=label;
+    b.onclick=()=>{vibe();fileFilter="";$("#fileSearch").value="";loadDir(path)};return b};
+  box.appendChild(mk("💾 Disques",""));
+  FAVS.forEach(([l,f])=>box.appendChild(mk(l,home+"\\"+f)));}
+renderFavs();
 $("#sortBtn").addEventListener("click",()=>{fileSort=fileSort==="name"?"size":fileSort==="size"?"date":"name";$("#sortBtn").textContent="Tri: "+({name:"nom",size:"taille",date:"date"}[fileSort]);loadDir(filePath)});
 function parentPath(p){const q=p.replace(/\\+$/,"");const i=q.lastIndexOf("\\");return i<=1?"":q.slice(0,i>2?i:3)}
 
@@ -615,13 +641,16 @@ BODY = r"""
 
   <section class="view" id="view-files" hidden>
     <div class="card"><div class="crumb" id="crumb"><b>Disques</b></div>
+      <div class="toolbar" id="fileFav"></div>
       <div class="toolbar" id="fileToolbar" hidden>
         <button class="btn sm" id="fileUp" aria-label="Dossier parent">↑</button>
         <button class="btn sm" id="fileRefresh" aria-label="Actualiser">↻</button>
         <button class="btn sm" id="newFolder">+ Dossier</button>
+        <button class="btn sm" id="newFile">+ Fichier</button>
         <label class="btn sm" style="cursor:pointer">↥ Envoyer<input type="file" id="uploadInput" multiple hidden></label>
         <button class="btn sm" id="sortBtn">Tri: nom</button>
       </div>
+      <div class="toolbar" id="fileSearchBar" hidden><input id="fileSearch" class="search" placeholder="Filtrer ce dossier…" autocomplete="off" spellcheck="false"><button class="btn sm ghost" id="fileSearchClear" aria-label="Effacer">✕</button></div>
       <div class="list" id="fileList"></div>
     </div>
   </section>
