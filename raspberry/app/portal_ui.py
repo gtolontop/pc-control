@@ -628,7 +628,14 @@ BODY = r"""
 
   <section class="view" id="view-system" hidden>
     <div class="card"><div class="card-h"><h2>Applications</h2></div><div class="card-b"><div class="apps" id="appList"></div></div></div>
-    <div class="card"><div class="card-b flush"><div class="grid" style="grid-template-columns:1fr">
+    <div class="card"><div class="card-h"><h2>Envoyer vers le PC</h2></div><div class="card-b"><div class="row">
+      <div class="kbar"><input id="sendUrl" placeholder="https://… à ouvrir sur le PC" autocomplete="off" spellcheck="false" enterkeyhint="go" inputmode="url"><button class="btn sm" id="sendUrlBtn">Ouvrir</button></div>
+      <div class="kbar"><input id="sendClip" placeholder="Texte → presse-papiers du PC" autocomplete="off" enterkeyhint="send"><button class="btn sm" id="sendClipBtn">Copier</button></div>
+      <div class="kbar"><input id="sendNotif" placeholder="Notification à afficher sur le PC" autocomplete="off" enterkeyhint="send"><button class="btn sm" id="sendNotifBtn">Notifier</button></div>
+      <button class="btn sm" id="pullClip" style="width:100%">⇩ Récupérer le presse-papiers du PC</button>
+    </div></div></div>
+    <div class="card"><div class="card-h"><h2>Fenêtres ouvertes</h2><div class="tools"><button class="btn sm" id="winRefresh" aria-label="Actualiser">↻</button></div></div><div class="card-b flush" id="winList"></div></div>
+    <div class="card"><div class="card-b flush"><div class="grid one">
       <div class="cell" id="sysVol"><span class="k">Volume système</span><span class="val">—</span></div>
     </div></div></div>
     <div class="card"><div class="card-h"><h2>Disques</h2></div><div class="card-b" id="driveList"></div></div>
