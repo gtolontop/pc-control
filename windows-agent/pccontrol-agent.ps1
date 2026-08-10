@@ -60,6 +60,10 @@ if (-not $createdNew) {
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 
+# Fonctions système partagées avec le pont (disque, processus). Aucune capture
+# d'écran ni base64 dedans : chargeable ici sans réveiller l'antivirus.
+. (Join-Path (Split-Path -Parent $PSCommandPath) 'pccontrol-fslib.ps1')
+
 $nativeSource = @'
 using System;
 using System.Runtime.InteropServices;
@@ -538,18 +542,39 @@ function Invoke-Launch {
     return @{ ok = $true; message = "$($entry.name) lancé." }
 }
 
+# Ouvre réellement l'élément avec l'application par défaut de Windows (n'importe
+# quel type : image, vidéo, PDF, document, exécutable…). Un dossier s'ouvre dans
+# l'explorateur. `reveal` force l'affichage dans l'explorateur au lieu d'ouvrir.
 function Invoke-OpenPath {
     param($Arguments)
     $path = [string](Get-ArgValue $Arguments 'path' '')
     if (-not $path) { throw 'Chemin manquant.' }
     if (-not (Test-Path -LiteralPath $path)) { throw 'Chemin introuvable.' }
     $item = Get-Item -LiteralPath $path -Force
+    $reveal = [bool](Get-ArgValue $Arguments 'reveal' $false)
+
     if ($item.PSIsContainer) {
         Start-Process -FilePath 'explorer.exe' -ArgumentList "`"$($item.FullName)`"" | Out-Null
-    } else {
-        Start-Process -FilePath 'explorer.exe' -ArgumentList "/select,`"$($item.FullName)`"" | Out-Null
+        return @{ ok = $true; message = "Dossier ouvert : $($item.Name)" }
     }
-    return @{ ok = $true; message = 'Explorateur ouvert sur la tour.' }
+    if ($reveal) {
+        Start-Process -FilePath 'explorer.exe' -ArgumentList "/select,`"$($item.FullName)`"" | Out-Null
+        return @{ ok = $true; message = "Affiché dans l'explorateur : $($item.Name)" }
+    }
+    # UseShellExecute : applique l'association de fichier Windows, quel que soit le type.
+    $info = New-Object System.Diagnostics.ProcessStartInfo
+    $info.FileName = $item.FullName
+    $info.UseShellExecute = $true
+    $info.WorkingDirectory = $item.DirectoryName
+    try {
+        [void][System.Diagnostics.Process]::Start($info)
+    } catch {
+        # Aucune association : on laisse Windows proposer « Ouvrir avec ».
+        Start-Process -FilePath 'rundll32.exe' `
+            -ArgumentList "shell32.dll,OpenAs_RunDLL `"$($item.FullName)`"" | Out-Null
+        return @{ ok = $true; message = "« Ouvrir avec » proposé pour $($item.Name)" }
+    }
+    return @{ ok = $true; message = "Ouvert : $($item.Name)" }
 }
 
 function Invoke-OpenUrl {
@@ -768,6 +793,16 @@ function Invoke-AgentAction {
         'OpenUrl' { return Invoke-OpenUrl $Arguments }
         'Notify' { return Invoke-Notify $Arguments }
         'SessionInfo' { return Get-SessionSnapshot }
+        # Système servi directement par l'agent : les dossiers deviennent instantanés
+        # (canal LAN ~10 ms) au lieu de passer par une connexion SSH ponctuelle.
+        'FsList' { return Invoke-FsListShared $Arguments }
+        'FsStat' { return Invoke-FsStatShared $Arguments }
+        'FsDelete' { return Invoke-FsDeleteShared $Arguments }
+        'FsMkdir' { return Invoke-FsMkdirShared $Arguments }
+        'FsRename' { return Invoke-FsRenameShared $Arguments }
+        'Drives' { return Invoke-DrivesShared }
+        'Processes' { return Invoke-ProcessesShared }
+        'KillProcess' { return Invoke-KillProcessShared $Arguments }
         'LogOff' {
             Start-Process -FilePath 'shutdown.exe' -ArgumentList '/l' -WindowStyle Hidden | Out-Null
             return @{ ok = $true; message = 'Fermeture de session demandée.' }

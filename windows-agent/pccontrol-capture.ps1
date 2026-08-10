@@ -122,8 +122,8 @@ while ($true) {
     $mon = if ($cfg.PSObject.Properties['monitor']) { [int]$cfg.monitor } else { -1 }
     $w = if ($cfg.PSObject.Properties['width']) { [int]$cfg.width } else { 1280 }
     $w = [math]::Max(320, [math]::Min(2560, $w))
-    $fps = if ($cfg.PSObject.Properties['fps']) { [int]$cfg.fps } else { 10 }
-    $fps = [math]::Max(2, [math]::Min(20, $fps))
+    $fps = if ($cfg.PSObject.Properties['fps']) { [int]$cfg.fps } else { 15 }
+    $fps = [math]::Max(2, [math]::Min(40, $fps))
 
     try {
         $frame = Get-FrameBytes -Mon $mon -OutWidth $w

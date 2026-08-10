@@ -890,6 +890,8 @@ CHANNEL_ACTIONS = {
     "Drag", "Scroll", "TypeText", "SendKey", "Volume", "Media", "Lock", "DisplaysOff",
     "DisplaysOn", "GetClipboard", "SetClipboard", "WindowList", "FocusWindow", "CloseWindow",
     "Launch", "OpenPath", "OpenUrl", "Notify", "SessionInfo", "LogOff",
+    # Système servi aussi par l'agent : navigation de dossiers instantanée.
+    "FsList", "FsStat", "FsDelete", "FsMkdir", "FsRename", "Drives", "Processes", "KillProcess",
 }
 
 

@@ -324,13 +324,13 @@ function renderHome(d){const pc=d.pc||{},on=!!d.online,ready=!!d.control_ready;
 /* ===== Screen streaming ===== */
 function screenWidth(){const w=$("#screenWrap").clientWidth||720;return clamp(Math.round(w*Math.min(2,window.devicePixelRatio||1)),640,1920)}
 function startScreen(){if(scr.on)return;scr.on=true;scr.seq=-1;scr.frames=0;scr.fpsT=performance.now();$("#liveBadge").hidden=false;
-  act("StreamStart",{monitor:scr.mon,width:screenWidth(),fps:15},true).catch(()=>{});loopScreen();}
+  act("StreamStart",{monitor:scr.mon,width:screenWidth(),fps:30},true).catch(()=>{});loopScreen();}
 function stopScreen(){scr.on=false;cancelAnimationFrame(scr.raf);$("#liveBadge")&&($("#liveBadge").hidden=true);if(data?.online)act("StreamStop",null,true).catch(()=>{})}
 async function loopScreen(){
   if(!scr.on||tab!=="screen"){return}
   if(!scr.inflight){scr.inflight=true;
     try{
-      const r=await api(`/api/screen?since=${scr.seq}&width=${screenWidth()}&monitor=${scr.mon}&fps=15`);
+      const r=await api(`/api/screen?since=${scr.seq}&width=${screenWidth()}&monitor=${scr.mon}&fps=30`);
       if(r.ready===false){$("#screenPh").textContent="Démarrage du flux…"}
       else{
         if(r.image){const img=$("#screenImg");img.src="data:image/jpeg;base64,"+r.image;img.hidden=false;$("#screenPh").hidden=true;scr.seq=r.img_seq;}
@@ -372,8 +372,14 @@ function bindScreen(){
 /* ===== Files (with chunked transfers) ===== */
 function b64ToBytes(b64){const bin=atob(b64),a=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++)a[i]=bin.charCodeAt(i);return a}
 function bytesToB64(bytes){let bin="";const CH=0x8000;for(let i=0;i<bytes.length;i+=CH)bin+=String.fromCharCode.apply(null,bytes.subarray(i,i+CH));return btoa(bin)}
-async function loadDir(path){filePath=path;setBusy(true);
-  try{renderDir(await act("FsList",{path},true))}catch(e){if(e.un)return lock(e.message);$("#fileList").innerHTML='<p class="empty">'+esc(e.message)+"</p>"}finally{setBusy(false)}}
+let dirSeq=0,dirCache=new Map();
+async function loadDir(path){
+  filePath=path;const my=++dirSeq;
+  // Rendu immédiat depuis le cache : la navigation paraît instantanée, puis on
+  // rafraîchit dès que la réponse arrive (~10 ms via le canal LAN).
+  const hit=dirCache.get(path);if(hit)renderDir(hit);else $("#fileList").innerHTML='<p class="empty">…</p>';
+  try{const r=await act("FsList",{path},true);if(my!==dirSeq)return;dirCache.set(path,r);renderDir(r)}
+  catch(e){if(my!==dirSeq)return;if(e.un)return lock(e.message);$("#fileList").innerHTML='<p class="empty">'+esc(e.message)+"</p>"}}
 function sortEntries(list){const dirs=list.filter(e=>e.dir),files=list.filter(e=>!e.dir);
   const by=fileSort==="size"?(a,b)=>(b.size||0)-(a.size||0):fileSort==="date"?(a,b)=>(b.modified||0)-(a.modified||0):(a,b)=>a.name.localeCompare(b.name);
   files.sort(by);dirs.sort((a,b)=>a.name.localeCompare(b.name));return[...dirs,...files]}
@@ -390,16 +396,17 @@ function crumbHtml(p){const parts=p.replace(/\\+$/,"").split("\\");let acc="";re
 const ICONS={txt:"📄",log:"📄",md:"📝",json:"🔧",js:"📜",ts:"📜",py:"🐍",html:"🌐",css:"🎨",jpg:"🖼️",jpeg:"🖼️",png:"🖼️",gif:"🖼️",webp:"🖼️",mp4:"🎬",mkv:"🎬",mov:"🎬",mp3:"🎵",wav:"🎵",zip:"🗜️",rar:"🗜️",exe:"⚙️",pdf:"📕",doc:"📘",docx:"📘",xls:"📗",xlsx:"📗"};
 function icon(n){const x=(n.split(".").pop()||"").toLowerCase();return ICONS[x]||"📄"}
 function isImg(n){return/\.(jpe?g|png|gif|webp|bmp)$/i.test(n)}
-async function fileMenu(e){const opts=[["Ouvrir sur le PC","open"]];
-  if(isImg(e.name))opts.unshift(["Aperçu image","img"]);else opts.unshift(["Aperçu texte","view"]);
+async function fileMenu(e){const opts=[["▶ Ouvrir sur le PC","open"],["Afficher dans l'explorateur","reveal"]];
+  if(isImg(e.name))opts.push(["Aperçu image","img"]);else opts.push(["Aperçu texte","view"]);
   opts.push(["Télécharger","dl"],["Renommer","ren"],["Supprimer","del"]);
   const c=await pick(e.name,opts);
   if(c==="view")try{const r=await act("FsRead",{path:e.path});textDlg(e.name,r.text)}catch(err){toast(err.message,"bad")}
   else if(c==="img")imgDlg(e);
   else if(c==="dl")downloadFile(e);
   else if(c==="open")act("OpenPath",{path:e.path}).then(r=>toast(r.message||"Ouvert","ok")).catch(()=>{});
-  else if(c==="ren"){const nn=await prompt2("Renommer",e.name);if(nn)await act("FsRename",{path:e.path,name:nn}).then(()=>{toast("Renommé","ok");loadDir(filePath)}).catch(err=>toast(err.message,"bad"))}
-  else if(c==="del"&&await confirm2("Supprimer ?",e.name))await act("FsDelete",{path:e.path,recurse:e.dir}).then(()=>{toast("Supprimé","ok");loadDir(filePath)}).catch(err=>toast(err.message,"bad"))}
+  else if(c==="reveal")act("OpenPath",{path:e.path,reveal:true}).then(r=>toast(r.message||"Affiché","ok")).catch(()=>{});
+  else if(c==="ren"){const nn=await prompt2("Renommer",e.name);if(nn)await act("FsRename",{path:e.path,name:nn}).then(()=>{toast("Renommé","ok");dirCache.delete(filePath);loadDir(filePath)}).catch(err=>toast(err.message,"bad"))}
+  else if(c==="del"&&await confirm2("Supprimer ?",e.name))await act("FsDelete",{path:e.path,recurse:e.dir}).then(()=>{toast("Supprimé","ok");dirCache.delete(filePath);loadDir(filePath)}).catch(err=>toast(err.message,"bad"))}
 async function imgDlg(e){try{const r=await act("FsDownload",{path:e.path});const url="data:image/*;base64,"+r.content_base64;$("#dlgBody").innerHTML=`<h3>${esc(e.name)}</h3><img src="${url}"><button class="btn" id="dc">Fermer</button>`;$("#dlg").showModal();$("#dc").onclick=()=>$("#dlg").close()}catch(err){toast(err.message,"bad")}}
 function saveBlob(blob,name){const url=URL.createObjectURL(blob),a=document.createElement("a");a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),2000)}
 async function downloadFile(e){
@@ -415,7 +422,7 @@ async function uploadOne(file){const buf=new Uint8Array(await file.arrayBuffer()
   const CH=700*1024;let off=0;showProg("Envoi "+file.name);
   try{if(total===0){await act("FsWriteChunk",{path:target,offset:0,content_base64:""},true)}
     while(off<total){const slice=buf.subarray(off,off+CH);await act("FsWriteChunk",{path:target,offset:off,content_base64:bytesToB64(slice)},true);off+=slice.length;setProg(off/total)}
-    toast("Envoyé","ok");loadDir(filePath)}catch(err){toast(err.message,"bad")}finally{hideProg()}}
+    toast("Envoyé","ok");dirCache.delete(filePath);loadDir(filePath)}catch(err){toast(err.message,"bad")}finally{hideProg()}}
 
 /* ===== System ===== */
 let procSort="mem";
@@ -508,8 +515,8 @@ const vr=$("#volRange");let vt=0;vr.addEventListener("input",()=>{$("#volVal").t
 
 // Files
 $("#fileUp").addEventListener("click",()=>loadDir(parentPath(filePath)));
-$("#fileRefresh").addEventListener("click",()=>loadDir(filePath));
-$("#newFolder").addEventListener("click",async()=>{const n=await prompt2("Nouveau dossier","");if(n)await act("FsMkdir",{path:filePath.replace(/\\+$/,"")+"\\"+n}).then(()=>{toast("Créé","ok");loadDir(filePath)}).catch(e=>toast(e.message,"bad"))});
+$("#fileRefresh").addEventListener("click",()=>{dirCache.delete(filePath);loadDir(filePath)});
+$("#newFolder").addEventListener("click",async()=>{const n=await prompt2("Nouveau dossier","");if(n)await act("FsMkdir",{path:filePath.replace(/\\+$/,"")+"\\"+n}).then(()=>{toast("Créé","ok");dirCache.delete(filePath);loadDir(filePath)}).catch(e=>toast(e.message,"bad"))});
 $("#uploadInput").addEventListener("change",e=>{if(e.target.files.length)uploadFiles([...e.target.files]);e.target.value=""});
 $("#sortBtn").addEventListener("click",()=>{fileSort=fileSort==="name"?"size":fileSort==="size"?"date":"name";$("#sortBtn").textContent="Tri: "+({name:"nom",size:"taille",date:"date"}[fileSort]);loadDir(filePath)});
 function parentPath(p){const q=p.replace(/\\+$/,"");const i=q.lastIndexOf("\\");return i<=1?"":q.slice(0,i>2?i:3)}
