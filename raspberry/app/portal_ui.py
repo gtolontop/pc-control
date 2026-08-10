@@ -261,7 +261,7 @@ const KEY="pcControlKey";
 const gate=$("#gate"),app=$("#app"),field=$("#key"),gateErr=$("#gateErr"),busyEl=$("#busy"),toastEl=$("#toast");
 let key=localStorage.getItem(KEY)||"";
 let data=null,tab="home",stream=null,streamStop=null,busyN=0,toastT=0;
-let scr={on:false,seq:-1,inflight:false,mon:-1,monitors:[],raf:0,frames:0,fpsT:0,clickMode:"left",scrollMode:false,last:0};
+let scr={on:false,forceW:null,seq:-1,inflight:false,mon:-1,monitors:[],raf:0,frames:0,fpsT:0,clickMode:"left",scrollMode:false,last:0};
 let filePath="",fileSort="name",sysHome="";
 const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
@@ -327,7 +327,7 @@ function renderHome(d){const pc=d.pc||{},on=!!d.online,ready=!!d.control_ready;
 }
 
 /* ===== Screen streaming ===== */
-function screenWidth(){const w=$("#screenWrap").clientWidth||720;return clamp(Math.round(w*Math.min(2,window.devicePixelRatio||1)),640,1920)}
+function screenWidth(){if(scr.forceW)return scr.forceW;const w=$("#screenWrap").clientWidth||720;return clamp(Math.round(w*Math.min(2,window.devicePixelRatio||1)),640,1920)}
 function startScreen(){if(scr.on)return;scr.on=true;scr.seq=-1;scr.frames=0;scr.fpsT=performance.now();$("#liveBadge").hidden=false;
   act("StreamStart",{monitor:scr.mon,width:screenWidth(),fps:30},true).catch(()=>{});loopScreen();}
 function stopScreen(){scr.on=false;cancelAnimationFrame(scr.raf);$("#liveBadge")&&($("#liveBadge").hidden=true);if(data?.online)act("StreamStop",null,true).catch(()=>{})}
@@ -468,7 +468,7 @@ async function runCmd(cmd){if(!cmd.trim())return;termHist.unshift(cmd);termIdx=-
     termWrite(`<div class="ok">— code ${r.exit_code}</div>`)}catch(e){termWrite(`<div class="err">${esc(e.message)}</div>`)}finally{setBusy(false)}}
 
 /* ===== Nav ===== */
-function switchTab(name){if(name!=="screen")stopScreen();tab=name;
+function switchTab(name){if(name!=="screen"){stopScreen();if(rec)stopRec()}tab=name;
   $$(".view").forEach(v=>v.hidden=v.id!=="view-"+name);
   $$(".nav button").forEach(b=>b.classList.toggle("active",b.dataset.tab===name));
   if(name==="home")renderHome(data||{});
@@ -515,6 +515,45 @@ bindScreen();
 $$("[data-click]").forEach(b=>b.addEventListener("click",()=>{vibe();scr.clickMode=b.dataset.click;$$("[data-click]").forEach(x=>x.classList.toggle("active",x===b))}));
 $("#scrollToggle").addEventListener("click",()=>{scr.scrollMode=!scr.scrollMode;$("#scrollToggle").classList.toggle("active",scr.scrollMode);$("#scrollToggle").textContent=scr.scrollMode?"Molette ●":"Molette ○"});
 $("#fsBtn").addEventListener("click",()=>{const w=$("#screenWrap");if(w.requestFullscreen)w.requestFullscreen().catch(()=>{})});
+// Capture PNG de la trame courante
+$("#snapBtn").addEventListener("click",()=>{const img=$("#screenImg");if(img.hidden)return toast("Aucune image",'bad');vibe();
+  const c=document.createElement("canvas");c.width=img.naturalWidth;c.height=img.naturalHeight;
+  c.getContext("2d").drawImage(img,0,0);
+  c.toBlob(bl=>{if(bl)saveBlob(bl,"gtol-"+Date.now()+".png");toast("Capture enregistrée","ok")},"image/png")});
+// Enregistrement vidéo : on peint chaque trame reçue dans un canvas capturé par MediaRecorder
+let rec=null,recCanvas=null,recCtx=null,recChunks=[],recStart=0,recTimer=0;
+let recRaf=0;
+// Boucle de peinture continue : MediaRecorder a besoin d'un flux régulier, sinon
+// il n'émet aucun bloc quand l'écran distant est statique.
+function recPaint(){if(!rec||!recCtx){recRaf=0;return}
+  const img=$("#screenImg");
+  if(!img.hidden&&img.naturalWidth){
+    if(recCanvas.width!==img.naturalWidth||recCanvas.height!==img.naturalHeight){recCanvas.width=img.naturalWidth;recCanvas.height=img.naturalHeight}
+    recCtx.drawImage(img,0,0)}
+  recRaf=requestAnimationFrame(recPaint)}
+function startRec(){const img=$("#screenImg");if(img.hidden)return toast("Démarre le flux d'abord","bad");
+  if(!window.MediaRecorder||!HTMLCanvasElement.prototype.captureStream)return toast("Enregistrement non supporté","bad");
+  recCanvas=document.createElement("canvas");recCanvas.width=img.naturalWidth||1280;recCanvas.height=img.naturalHeight||720;
+  recCtx=recCanvas.getContext("2d");recPaint();
+  const stream=recCanvas.captureStream(25);recChunks=[];
+  const types=["video/webm;codecs=vp9","video/webm;codecs=vp8","video/webm","video/mp4"];
+  const mt=types.find(t=>MediaRecorder.isTypeSupported(t))||"";
+  try{rec=new MediaRecorder(stream,mt?{mimeType:mt,videoBitsPerSecond:4000000}:undefined)}catch{return toast("Enregistrement refusé","bad")}
+  rec.ondataavailable=e=>{if(e.data&&e.data.size)recChunks.push(e.data)};
+  rec.onstop=()=>{const bl=new Blob(recChunks,{type:mt||"video/webm"});
+    saveBlob(bl,"gtol-"+Date.now()+(mt.includes("mp4")?".mp4":".webm"));toast("Vidéo enregistrée","ok")};
+  rec.start(500);recStart=Date.now();if(!recRaf)recPaint();
+  $("#recBtn").classList.add("armed");
+  recTimer=setInterval(()=>{const sec=Math.floor((Date.now()-recStart)/1000);
+    $("#recBtn").textContent="⏹ "+String(Math.floor(sec/60)).padStart(2,"0")+":"+String(sec%60).padStart(2,"0")},500);
+  vibe(15);toast("Enregistrement démarré","ok")}
+function stopRec(){if(!rec)return;try{rec.requestData()}catch{}try{rec.stop()}catch{}rec=null;recCtx=null;cancelAnimationFrame(recRaf);recRaf=0;clearInterval(recTimer);
+  $("#recBtn").classList.remove("armed");$("#recBtn").textContent="⏺ Enregistrer";vibe(15)}
+$("#recBtn").addEventListener("click",()=>rec?stopRec():startRec());
+// Qualité : auto (résolution écran) / haute / basse
+const QUAL=[["auto",null],["haute",1600],["basse",720]];let qualIdx=0;
+$("#qualityBtn").addEventListener("click",()=>{qualIdx=(qualIdx+1)%QUAL.length;scr.forceW=QUAL[qualIdx][1];scr.seq=-1;
+  $("#qualityBtn").textContent="Qualité: "+QUAL[qualIdx][0];vibe()});
 $("#keyText").addEventListener("keydown",e=>{
   const special={Enter:"enter",Backspace:"backspace",Tab:"tab",Escape:"escape",ArrowUp:"up",ArrowDown:"down",ArrowLeft:"left",ArrowRight:"right",Delete:"delete"};
   if(special[e.key]){e.preventDefault();const mods=[];if(e.ctrlKey)mods.push("ctrl");if(e.altKey)mods.push("alt");if(e.shiftKey)mods.push("shift");act("SendKey",{key:special[e.key],modifiers:mods},true).catch(()=>{})}
@@ -624,6 +663,7 @@ BODY = r"""
     </div></div></div>
     <div class="seg" style="grid-template-columns:1fr 1fr 1fr"><button data-click="left" class="active">Clic</button><button data-click="right">Droit</button><button data-click="double">Double</button></div>
     <div class="row three"><button class="btn sm" id="scrollToggle">Molette ○</button><button class="btn sm" id="pasteClip">Coller</button><button class="btn sm" id="fsBtn">Plein écran</button></div>
+    <div class="row three"><button class="btn sm" id="snapBtn">📸 Capture</button><button class="btn sm" id="recBtn">⏺ Enregistrer</button><button class="btn sm" id="qualityBtn">Qualité: auto</button></div>
     <span id="monitorSel" class="seg" hidden></span>
     <div class="card"><div class="card-h"><h2>Clavier</h2></div><div class="card-b">
       <div class="kbar"><input id="keyText" placeholder="Tape ici (envoi live)…" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="send"></div>
